@@ -1,0 +1,25 @@
+name: Coach AI Web
+version: "0.2.0"
+slug: coachai_web
+description: Dashboard Coach AI locale, in sola lettura
+arch:
+  - amd64
+startup: application
+boot: auto
+init: false
+map:
+  - type: share
+    read_only: true
+ports:
+  8099/tcp: 8099
+ports_description:
+  8099/tcp: Dashboard web
+webui: "http://[HOST]:[PORT:8099]"
+panel_icon: mdi:bike
+
+options:
+  intervals_athlete_id: ""
+  intervals_api_key: ""
+schema:
+  intervals_athlete_id: str
+  intervals_api_key: password
