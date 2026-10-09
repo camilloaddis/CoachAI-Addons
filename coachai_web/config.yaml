@@ -1,7 +1,7 @@
 name: Coach AI Web
-version: "0.3.0"
+version: "0.4.0"
 slug: coachai_web
-description: Dashboard Coach AI locale, in sola lettura
+description: Dashboard e servizi Coach AI, Telegram disabilitato per default
 arch:
   - amd64
 startup: application
@@ -20,6 +20,18 @@ panel_icon: mdi:bike
 options:
   intervals_athlete_id: ""
   intervals_api_key: ""
+  telegram_enabled: false
+  node_red_stopped: false
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+  admin_api_token: ""
+  data_source: snapshot
 schema:
   intervals_athlete_id: str
   intervals_api_key: password
+  telegram_enabled: bool
+  node_red_stopped: bool
+  telegram_bot_token: password
+  telegram_chat_id: str
+  admin_api_token: password
+  data_source: list(snapshot|local)

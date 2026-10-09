@@ -5,7 +5,7 @@ import './style.css';
 type Activity = {activity_date:string;name:string;category:string;duration_min:number|null;training_load:number|null;avg_power:number|null};
 type Meal = {date:string;meal_type:string;description:string;calories:number|null;protein_g:number|null;carbs_g:number|null;fat_g:number|null};
 type Daily = {date:string;weight:number|null;calories_in:number|null;protein_g:number|null;carbs_g:number|null;fat_g:number|null;exercise_kcal:number|null;training_load:number|null};
-type Overview = {status:string;snapshotUpdatedAt:string|null;snapshotVerified:boolean;history:{available:boolean;limitation:string;entries:{date:string;observed_at:string;score:number|null;confidence:number;recommendation:string}[]};activities:Activity[];meals:Meal[];daily:Daily[];readiness:{score:number|null;confidence:number;status:string;assessmentState:string;recommendation:string;reasons:string[];missing:string[];date:string;metrics:{ctl:number|null;atl:number|null;tsb:number|null}}};
+type Overview = {dataSource?:string;status:string;snapshotUpdatedAt:string|null;snapshotVerified:boolean;history:{available:boolean;limitation:string;entries:{date:string;observed_at:string;score:number|null;confidence:number;recommendation:string}[]};activities:Activity[];meals:Meal[];daily:Daily[];readiness:{score:number|null;confidence:number;status:string;assessmentState:string;recommendation:string;reasons:string[];missing:string[];date:string;metrics:{ctl:number|null;atl:number|null;tsb:number|null}}};
 const nf = (value:number|null|undefined,suffix='') => value === null || value === undefined ? '—' : Math.round(value).toLocaleString('it-IT')+suffix;
 const date = (s:string) => {const d=new Date(s+'T12:00:00');return Number.isNaN(d.valueOf())?s:d.toLocaleDateString('it-IT',{day:'2-digit',month:'short'})};
 function App(){
@@ -43,7 +43,7 @@ function App(){
       <section className="panel"><div className="panel-title"><h2>Ultimi riepiloghi</h2><span>Fino a 30 giorni</span></div>
         <div className="tablewrap"><table><thead><tr><th>Data</th><th>Calorie introdotte</th><th>Proteine</th><th>Attività kcal</th><th>Carico</th><th>Peso</th></tr></thead><tbody>{(data?.daily||[]).map(d=><tr key={d.date}><td>{date(d.date)}</td><td>{nf(d.calories_in)}</td><td>{nf(d.protein_g,' g')}</td><td>{nf(d.exercise_kcal)}</td><td>{nf(d.training_load)}</td><td>{nf(d.weight,' kg')}</td></tr>)}</tbody></table>{!data?.daily.length&&<p className="muted empty">Nessun riepilogo giornaliero disponibile.</p>}</div>
       </section>
-      <footer>Coach AI Web 0.3.0 · Snapshot SQLite in sola lettura · Intervals opzionale, solo GET</footer>
+      <footer>Coach AI Web 0.4.0 · {data?.dataSource === 'local' ? 'Database applicativo locale' : 'Snapshot SQLite in sola lettura'} · Intervals opzionale, solo GET</footer>
     </main>
   </div>
 }

@@ -1,14 +1,15 @@
 {
   "name": "coachai-web",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build && tsc -p tsconfig.server.json",
+    "build": "vite build && tsc -p tsconfig.server.json && node scripts/copy-migrations.mjs",
     "dev": "vite --host 0.0.0.0",
     "check": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "start": "node build/server.js",
-    "test": "npm run build && node --test tests/*.test.mjs"
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "import:history": "node build/storage/import-cli.js"
   },
   "dependencies": {
     "@fastify/static": "10.1.6",
