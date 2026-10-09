@@ -7,10 +7,14 @@ export function readinessService(
   config: { key?: string; athlete?: string },
   fetcher: typeof fetch = fetch,
   clock: () => Date = () => new Date(),
+  revision: () => string = () => "",
 ) {
   let cache: { date: string; expires: number; result: Result } | null = null;
   let pending: { date: string; promise: Promise<Result> } | null = null;
+  let lastRevision = "";
   return async (): Promise<Result> => {
+    const next = revision();
+    if (next !== lastRevision) { cache = null; pending = null; lastRevision = next; }
     const now = clock(),
       date = today(now);
     if (cache?.date === date && cache.expires > now.getTime())
@@ -47,7 +51,7 @@ export function readinessService(
         historyComplete: remote.historyComplete,
         issues: [...local.issues, ...remote.issues],
       });
-      cache = { date, expires: now.getTime() + 60000, result };
+      if (revision() === next) cache = { date, expires: now.getTime() + 60000, result };
       return result;
     })();
     pending = { date, promise };

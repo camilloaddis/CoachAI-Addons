@@ -199,6 +199,7 @@ export function evaluate(input: Input): Result {
   const score = weight
     ? Math.round(Math.max(0, Math.min(100, sum / weight)))
     : null;
+  const recoveryLimited = cap <= 1;
   if (!current) {
     cap = Math.min(cap, 1);
     missing.push(
@@ -261,6 +262,7 @@ export function evaluate(input: Input): Result {
         : confidence < 75
           ? "valutazione parziale"
           : "valutazione disponibile",
+    assessmentState: recoveryLimited ? "insufficient_recovery" : score === null || !current || confidence < 40 ? "missing_data" : "available",
     recommendation: options[rank],
     reasons,
     missing,

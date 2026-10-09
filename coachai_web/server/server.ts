@@ -1,15 +1,17 @@
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, statSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { readinessService } from "./readiness/service.js";
+import { historyStore } from "./history.js";
 import { intervalsConfig } from "./readiness/config.js";
 
 export async function createApp(
   options: {
     dbPath?: string;
+    historyPath?: string | null;
     intervalsKey?: string;
     athlete?: string;
     fetcher?: typeof fetch;
@@ -24,8 +26,20 @@ export async function createApp(
     "/share/coachai/cycling_coach.db";
   let db: DatabaseSync | null = null;
 
+  let fingerprint = "";
+  const historyPath = options.historyPath === undefined ? (process.env.COACHAI_HISTORY ?? "/data/coachai/readiness-history.sqlite") : options.historyPath;
+  const canonical = (path: string) => existsSync(path) ? realpathSync(path) : resolve(path);
+  if (historyPath && (canonical(historyPath) === canonical(dbPath) || canonical(historyPath) === "/config/cycling_coach.db")) throw new Error("History must use separate add-on storage");
+  const history = historyStore(historyPath);
+  function revision() {
+    if (!existsSync(dbPath)) return "missing";
+    const s = statSync(dbPath, { bigint: true });
+    return `${s.dev}:${s.ino}:${s.mtimeNs}:${s.size}`;
+  }
   function database(): DatabaseSync | null {
-    if (!existsSync(dbPath)) return null;
+    const next = revision();
+    if (next !== fingerprint) { db?.close(); db = null; fingerprint = next; }
+    if (next === "missing") return null;
     if (!db) db = new DatabaseSync(dbPath, { readOnly: true });
     return db;
   }
@@ -49,7 +63,7 @@ export async function createApp(
     );
   }
   const configured = intervalsConfig();
-  const readiness = readinessService(
+  const calculate = readinessService(
     database,
     {
       key: options.intervalsKey ?? configured.key,
@@ -57,9 +71,22 @@ export async function createApp(
     },
     options.fetcher,
     options.clock,
+    revision,
   );
+  let recorded: Awaited<ReturnType<typeof calculate>> | null = null;
+  async function readiness() {
+    const result = await calculate();
+    if (result !== recorded && history.record(result, options.clock?.() ?? new Date())) recorded = result;
+    return result;
+  }
+  function snapshot() {
+    const row = safeQuery<{ synced_at: string }>("SELECT synced_at FROM coachai_snapshot_metadata WHERE id = 1")[0];
+    return { snapshotUpdatedAt: row?.synced_at ?? (existsSync(dbPath) ? statSync(dbPath).mtime.toISOString() : null), snapshotVerified: Boolean(row) };
+  }
+  app.get("/api/readiness/history", async () => history.read());
   app.addHook("onClose", async () => {
     db?.close();
+    history.close();
     db = null;
   });
   app.get("/api/readiness", async () => readiness());
@@ -68,10 +95,8 @@ export async function createApp(
     status: database() ? "ready" : "waiting_for_snapshot",
     mode: "read_only_snapshot",
     database: existsSync(dbPath),
-    snapshotUpdatedAt: existsSync(dbPath)
-      ? statSync(dbPath).mtime.toISOString()
-      : null,
-    version: "0.2.0",
+    ...snapshot(),
+    version: "0.3.0",
   }));
   app.get("/api/overview", async () => {
     const availability = {
@@ -96,14 +121,13 @@ export async function createApp(
       : [];
     return {
       status: database() ? "ready" : "waiting_for_snapshot",
-      snapshotUpdatedAt: existsSync(dbPath)
-        ? statSync(dbPath).mtime.toISOString()
-        : null,
+      ...snapshot(),
       availability,
       activities,
       meals,
       daily,
       readiness: await readiness(),
+      history: history.read(),
     };
   });
   app.get<{ Params: { date: string } }>(

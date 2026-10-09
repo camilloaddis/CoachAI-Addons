@@ -50,6 +50,7 @@ export type Result = {
   score: number | null;
   confidence: number;
   status: string;
+  assessmentState: "missing_data" | "insufficient_recovery" | "available";
   recommendation: Recommendation;
   reasons: string[];
   missing: string[];
