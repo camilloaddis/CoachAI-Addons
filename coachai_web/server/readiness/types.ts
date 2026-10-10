@@ -8,6 +8,14 @@ export type Activity = {
   type?: string | null;
   commute?: boolean | null;
   rpe?: number | null;
+  startLocal?: string | null;
+  averagePower?: number | null;
+  normalizedPower?: number | null;
+  intensityFactor?: number | null;
+  ftp?: number | null;
+  averageHR?: number | null;
+  powerZones?: { zone: number; seconds: number }[] | null;
+  executedIntervals?: { seconds: number; averagePower: number }[] | null;
 };
 export type Wellness = {
   date: string;
@@ -21,7 +29,7 @@ export type Feedback = {
   activityDate: string;
   updatedAt: string | null; // Last update instant, never claimed to be first insertion.
   updatedDate: string | null; // Europe/Rome date of that instant.
-  sensationDate: null; // Telegram stores no observation date.
+  sensationDate: string | null; // Only an explicitly stored observation date.
   legs: number;
 };
 export type IntensityAssessment = {
@@ -29,6 +37,43 @@ export type IntensityAssessment = {
   date: string;
   status: "confermata" | "probabile" | "non_determinabile";
   reasons: string[];
+  measurements?: {
+    duration: number | null;
+    load: number | null;
+    averagePower: number | null;
+    normalizedPower: number | null;
+    ftp: number | null;
+    intensityFactor: number | null;
+    averageHR: number | null;
+    zoneCount: number;
+    intervalCount: number;
+  };
+  isHard?: boolean | null;
+  highIntensity?: boolean;
+  evidence?: "measured" | "inferred" | "missing";
+};
+export type Factor = {
+  code: string;
+  category:
+    | "physiology"
+    | "load"
+    | "activity"
+    | "feedback"
+    | "data"
+    | "schedule"
+    | "plan"
+    | "request";
+  polarity: "positive" | "negative" | "neutral" | "uncertain";
+  evidence: "measured" | "subjective" | "inferred" | "missing" | "policy";
+  text: string;
+};
+export type Constraint = Factor & {
+  ceiling: number;
+  before: number;
+  after: number;
+  applied: boolean;
+  source: "readiness" | "training";
+  blocksRequested?: boolean;
 };
 export type Input = {
   date: string;
@@ -52,6 +97,8 @@ export type Result = {
   status: string;
   assessmentState: "missing_data" | "insufficient_recovery" | "available";
   recommendation: Recommendation;
+  factors: Factor[];
+  constraints: Constraint[];
   reasons: string[];
   missing: string[];
   metrics: {

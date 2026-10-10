@@ -1,3 +1,4 @@
+import { escapeHtml } from "../telegram/presentation.js";
 import type { DatabaseSync } from "node:sqlite";
 import { diagnostic, transaction } from "../storage/database.js";
 import { shift, today } from "../readiness/types.js";
@@ -69,7 +70,8 @@ export async function flushFeedback(
     try {
       const result = (await api("sendMessage", {
         chat_id: chatId,
-        text: `Attività ${row.activity_date}: ${String(row.name || row.activity_id).slice(0, 500)}.\nCome erano le gambe durante questa attività? La risposta è retrospettiva, non una misura del recupero odierno.`,
+        parse_mode: "HTML",
+        text: `<b>Feedback gambe</b>\n\nAttività ${escapeHtml(String(row.activity_date))}: ${escapeHtml(String(row.name || row.activity_id).slice(0, 500))}.\n\nCome erano le gambe durante questa attività?\n<i>Risposta retrospettiva, non misura del recupero odierno.</i>`,
         reply_markup: {
           inline_keyboard: [
             [1, 2, 3, 4, 5].map((n) => ({

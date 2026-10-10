@@ -1,4 +1,4 @@
-# Coach AI Web 0.5.0
+# Coach AI Web 0.6.0
 
 Dashboard React/Fastify con Readiness Engine, diario alimentare e servizi persistenti. Home Assistant OS amd64, Node.js 24, porta 8099. Home Assistant costruisce l'immagine dal Dockerfile e dal lockfile inclusi; nessun database o credenziale è distribuito.
 
@@ -13,3 +13,5 @@ Credenziali solo nelle opzioni password: `intervals_api_key`, `telegram_bot_toke
 Il diario produce stime da confermare con `accetta pasto`, gestisce `annulla`, `pasti DATA`, correzioni e cancellazioni. `settimana` termina a ieri. `allenamento` seleziona strutture deterministiche con FTP configurabile (220 W di riferimento), otto settimane e guardrail conservativi; AI spiega la decisione, non cambia il workout. `accetta` carica un evento solo con scrittura Intervals esplicitamente abilitata.
 
 Richieste gambe per Ride/VirtualRide recenti non commuting, anche senza evento pianificato. Gli invii incerti e i flag storici non provano consegna: richiedono verifica manuale e non vengono duplicati automaticamente. I feedback retrospettivi non sono misure fisiologiche odierne. Menù testuali, piano futuro condizionale e assenza di verifica Garmin sono limiti espliciti; non si dichiara parità perfetta con ogni interazione Node-RED.
+
+La versione 0.6.0 aggiunge classificazione basata sui dati misurati disponibili, diagnostica strutturata dei vincoli e tastiere Telegram HTML con callback persistenti. Migrazione SQL003 additiva conserva outbox legacy; non ripete l’importazione storica. Nessuna nuova credenziale/opzione. Dati mancanti restano incerti, feedback negativo continua a limitare il carico.

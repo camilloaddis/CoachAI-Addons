@@ -1,3 +1,4 @@
+import { telemetry, compareActivities } from "./telemetry.js";
 import type { DatabaseSync } from "node:sqlite";
 import {
   number,
@@ -44,6 +45,7 @@ export function normalizeActivities(value: unknown): Activity[] {
     if (!validDate(date) || !r.id) throw new Error("Invalid activity");
     const seconds = number(r.moving_time);
     return {
+      ...telemetry(r),
       id: String(r.id),
       date,
       load: number(r.icu_training_load),
@@ -55,7 +57,9 @@ export function normalizeActivities(value: unknown): Activity[] {
       rpe: number(r.session_rpe ?? r.icu_rpe ?? r.perceived_exertion, 0, 10),
     };
   });
-  return [...new Map(mapped.map((a) => [a.id, a])).values()];
+  return [...new Map(mapped.map((a) => [a.id, a])).values()].sort(
+    compareActivities,
+  );
 }
 export function readSnapshot(
   db: DatabaseSync | null,
@@ -85,10 +89,24 @@ export function readSnapshot(
           "SELECT * FROM training_activities WHERE activity_date >= ? AND activity_date <= ?",
         )
         .all(shift(date, -28), date) as Row[];
+      const rawColumns = columns("activity_processing");
+      const payloads = new Map(
+        rawColumns.has("payload")
+          ? db
+              .prepare("SELECT activity_id,payload FROM activity_processing")
+              .all()
+              .map((r) => [String(r.activity_id), String(r.payload)])
+          : [],
+      );
       for (const r of records) {
         const d = String(r.activity_date);
         if (validDate(d))
           activities.push({
+            ...(payloads.has(String(r.activity_id))
+              ? telemetry(JSON.parse(payloads.get(String(r.activity_id))!))
+              : {}),
+            averagePower: number(r.avg_power),
+            averageHR: number(r.avg_hr, 1, 250),
             id: String(r.activity_id),
             date: d,
             load: number(r.training_load),
@@ -115,9 +133,13 @@ export function readSnapshot(
     ) {
       const records = db
         .prepare(
-          `SELECT ta.activity_date, tf.legs, ${f.has("updated_at") ? "tf.updated_at" : "NULL"} AS updated_at FROM training_feedback tf JOIN training_activities ta ON ta.activity_id=tf.activity_id WHERE ta.activity_date >= ? AND ta.activity_date <= ?`,
+          `SELECT ta.activity_date, tf.legs, ${f.has("updated_at") ? "tf.updated_at" : "NULL"} AS updated_at, ${f.has("sensation_date") ? "tf.sensation_date" : "NULL"} AS sensation_date FROM training_feedback tf JOIN training_activities ta ON ta.activity_id=tf.activity_id WHERE ta.activity_date <= ? AND (ta.activity_date >= ? ${f.has("sensation_date") ? "OR tf.sensation_date >= ?" : ""})`,
         )
-        .all(shift(date, -2), date) as Row[];
+        .all(
+          date,
+          shift(date, -2),
+          ...(f.has("sensation_date") ? [shift(date, -2)] : []),
+        ) as Row[];
       for (const r of records) {
         const legs = number(r.legs, 1, 5),
           activityDate = String(r.activity_date);
@@ -142,11 +164,18 @@ export function readSnapshot(
         feedback.push({
           activityDate,
           ...timestamp,
-          sensationDate: null,
+          sensationDate:
+            typeof r.sensation_date === "string" &&
+            validDate(r.sensation_date) &&
+            r.sensation_date <= date &&
+            timestamp.updatedDate !== null &&
+            r.sensation_date <= timestamp.updatedDate
+              ? r.sensation_date
+              : null,
           legs,
         });
       }
-      if (feedback.length)
+      if (feedback.some((f) => f.sensationDate === null))
         issues.push(
           "Telegram salva l’ultima modifica, non la data della sensazione: feedback retrospettivo, non misurazione giornaliera.",
         );
@@ -157,6 +186,7 @@ export function readSnapshot(
   } catch {
     issues.push("Lettura schema/snapshot SQLite fallita.");
   }
+  activities.sort(compareActivities);
   return { activities, feedback, issues };
 }
 export async function readIntervals(

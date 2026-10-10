@@ -1,3 +1,4 @@
+import { callbackAction, type Envelope } from "./presentation.js";
 import type { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
@@ -136,20 +137,107 @@ export function telegramWorker(
       workout_easy: "leggero",
     };
     if (input?.text && aliases[input.text]) input.text = aliases[input.text];
-    if (callback && input?.text?.startsWith("legs|")) {
-      const request = db
-        .prepare("SELECT message_id FROM feedback_requests WHERE id=?")
-        .get(Number(input.text.split("|")[1]));
-      if (
-        request?.message_id !== callback.message?.message_id ||
-        String(callback.from?.id) !== config.chatId
-      )
-        input.text = undefined;
+    const callbackAuthorized =
+      String(callback?.message?.chat?.id) === config.chatId &&
+      callback?.message?.chat?.type === "private" &&
+      Number.isSafeInteger(callback?.message?.message_id) &&
+      Number(callback?.message?.message_id) > 0 &&
+      String(callback?.from?.id) === config.chatId;
+    let callbackKey: string | null = null,
+      obsolete = false,
+      duplicateCallback = false;
+    if (callback) {
+      const action = callbackAction(callback.data);
+      if (!callbackAuthorized || typeof callback.id !== "string") {
+        if (input) input.text = undefined;
+      } else if (
+        typeof callback.data === "string" &&
+        /^legs\|(0|[1-9]\d*)\|[1-5]$/.test(callback.data)
+      ) {
+        const request = db
+          .prepare("SELECT message_id,status FROM feedback_requests WHERE id=?")
+          .get(Number(callback.data.split("|")[1]));
+        obsolete =
+          !request ||
+          request.message_id !== callback.message?.message_id ||
+          request.status === "received";
+      } else if (action) {
+        const parent = db
+          .prepare(
+            "SELECT markup,message_id FROM telegram_outbox WHERE update_id=? AND message_id=? AND status='sent'",
+          )
+          .get(action.id, callback.message?.message_id ?? -1);
+        const part = db
+          .prepare(
+            "SELECT markup,message_id FROM telegram_message_parts WHERE update_id=? AND message_id=? AND status='sent'",
+          )
+          .get(action.id, callback.message?.message_id ?? -1);
+        const envelope = parent ?? part;
+        const buttons = envelope?.markup
+          ? JSON.parse(String(envelope.markup)).inline_keyboard.flat()
+          : [];
+        obsolete = !buttons.some(
+          (b: { callback_data?: string }) => b.callback_data === callback.data,
+        );
+        if (
+          [
+            "accept",
+            "regen",
+            "light",
+            "hard",
+            "ss",
+            "vo2",
+            "endurance",
+            "force",
+          ].includes(action.action)
+        )
+          obsolete =
+            obsolete ||
+            db
+              .prepare(
+                "SELECT id FROM workout_proposals ORDER BY created_at DESC,rowid DESC LIMIT 1",
+              )
+              .get()?.id !== String(action.id);
+        if (["confirm", "edit", "cancel"].includes(action.action)) {
+          const draft = db
+            .prepare("SELECT payload FROM nutrition_drafts WHERE id='active'")
+            .get();
+          obsolete =
+            obsolete ||
+            !draft ||
+            JSON.parse(String(draft.payload)).requestId !== action.id;
+        }
+        if (input) input.text = action.command;
+      } else obsolete = true;
+      if (callbackAuthorized && typeof callback.id === "string") {
+        callbackKey = `${callback.message?.message_id}:${callback.data}`;
+        duplicateCallback = !!db
+          .prepare(
+            "SELECT update_id FROM telegram_callback_receipts WHERE callback_key=?",
+          )
+          .get(callbackKey);
+        if (obsolete || duplicateCallback) {
+          if (input) input.text = undefined;
+        }
+        try {
+          await api("answerCallbackQuery", {
+            callback_query_id: callback.id,
+            text: duplicateCallback
+              ? "Già elaborato."
+              : obsolete
+                ? "Messaggio obsoleto. Apri il menu con /home."
+                : "Elaborazione…",
+          });
+        } catch {
+          diagnostic(db, "error", "telegram_callback_ack_failed");
+        }
+      }
     }
     const authorized =
       String(input?.chat?.id) === config.chatId &&
       input?.chat?.type === "private" &&
-      typeof input?.text === "string";
+      typeof input?.text === "string" &&
+      (!callback || callbackAuthorized);
     const prepared =
       handler && authorized ? await handler.prepare(input!.text!, id) : null;
     if (!owns() || !acquire()) throw new Error("Telegram lease lost");
@@ -166,8 +254,13 @@ export function telegramWorker(
       const message = input as
         | { chat?: { id?: number; type?: string }; text?: string }
         | undefined;
-      let outcome = "ignored",
+      let outcome = duplicateCallback
+          ? "duplicate_callback"
+          : obsolete
+            ? "obsolete_callback"
+            : "ignored",
         reply: string | null = null;
+      let messages: Envelope[] | undefined;
       if (
         String(message?.chat?.id) === config.chatId &&
         message?.chat?.type === "private" &&
@@ -180,6 +273,7 @@ export function telegramWorker(
             const applied = handler.apply(prepared, id);
             outcome = applied.outcome;
             reply = applied.reply;
+            messages = applied.messages;
           } else if (message.text.startsWith("/pasto ")) {
             const raw = JSON.parse(message.text.slice(7));
             if (!raw || typeof raw !== "object" || Array.isArray(raw))
@@ -231,21 +325,37 @@ export function telegramWorker(
       db.prepare(
         "INSERT INTO app_state VALUES('telegram_last_update_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
       ).run(String(id));
-      if (reply)
+      if (reply) {
+        const first = messages?.[0];
         db.prepare(
-          "INSERT INTO telegram_outbox(update_id,content,status) VALUES(?,?,'pending')",
-        ).run(id, reply);
+          "INSERT INTO telegram_outbox(update_id,content,status,format,markup) VALUES(?,?,'pending',?,?)",
+        ).run(
+          id,
+          first?.text ?? reply,
+          first?.parse_mode ?? "plain",
+          first?.reply_markup ? JSON.stringify(first.reply_markup) : null,
+        );
+        for (const [index, part] of (messages?.slice(1) ?? []).entries())
+          db.prepare(
+            "INSERT INTO telegram_message_parts(update_id,part,content,status,format,markup) VALUES(?,?,?,'pending',?,?)",
+          ).run(
+            id,
+            index + 1,
+            part.text,
+            part.parse_mode,
+            part.reply_markup ? JSON.stringify(part.reply_markup) : null,
+          );
+      }
+      if (callbackKey && !obsolete && !duplicateCallback && authorized)
+        db.prepare("INSERT INTO telegram_callback_receipts VALUES(?,?,?)").run(
+          callbackKey,
+          id,
+          clock().toISOString(),
+        );
       diagnostic(db, "telegram_received", outcome);
       if (outcome === "invalid")
         diagnostic(db, "error", "telegram_input_invalid");
     });
-    if (callback?.id && authorized) {
-      try {
-        await api("answerCallbackQuery", { callback_query_id: callback.id });
-      } catch {
-        diagnostic(db, "error", "telegram_callback_ack_failed");
-      }
-    }
   }
   async function flush() {
     // Interrupted sends cannot be safely retried: Telegram sendMessage has no idempotency key.
@@ -256,41 +366,73 @@ export function telegramWorker(
           "UPDATE telegram_outbox SET status='unknown' WHERE status='sending'",
         )
         .run().changes;
-      if (Number(changed) > 0)
+      db.prepare(
+        "UPDATE telegram_message_parts SET status='unknown' WHERE status='pending' AND update_id IN (SELECT update_id FROM telegram_outbox WHERE status='unknown' UNION SELECT update_id FROM telegram_message_parts WHERE status='sending' OR status='unknown')",
+      ).run();
+      const extra = db
+        .prepare(
+          "UPDATE telegram_message_parts SET status='unknown' WHERE status='sending'",
+        )
+        .run().changes;
+      if (Number(changed) + Number(extra) > 0)
         diagnostic(db, "error", "telegram_interrupted_send_unknown");
     });
-    const pending = db
-      .prepare(
-        "SELECT update_id,content FROM telegram_outbox WHERE status='pending' ORDER BY update_id",
-      )
-      .all();
+    const pending = [
+      ...db
+        .prepare(
+          "SELECT update_id,0 AS part,content,format,markup FROM telegram_outbox WHERE status='pending'",
+        )
+        .all(),
+      ...db
+        .prepare(
+          "SELECT update_id,part,content,format,markup FROM telegram_message_parts WHERE status='pending'",
+        )
+        .all(),
+    ].sort(
+      (a, b) =>
+        Number(a.update_id) - Number(b.update_id) ||
+        Number(a.part) - Number(b.part),
+    );
     for (const row of pending) {
+      const table =
+        Number(row.part) === 0 ? "telegram_outbox" : "telegram_message_parts";
+      const where =
+        Number(row.part) === 0 ? "update_id=?" : "update_id=? AND part=?";
+      const keys =
+        Number(row.part) === 0 ? [row.update_id] : [row.update_id, row.part];
       transaction(db, () => {
         if (!owns()) throw new Error("Telegram lease lost");
         db.prepare(
-          "UPDATE telegram_outbox SET status='sending' WHERE update_id=? AND status='pending'",
-        ).run(row.update_id);
+          `UPDATE ${table} SET status='sending' WHERE ${where} AND status='pending'`,
+        ).run(...keys);
       });
       try {
         const result = (await api("sendMessage", {
           chat_id: config.chatId,
           text: row.content,
+          ...(row.format === "HTML" ? { parse_mode: "HTML" } : {}),
+          ...(row.markup
+            ? { reply_markup: JSON.parse(String(row.markup)) }
+            : {}),
         })) as { message_id?: number };
         if (!Number.isSafeInteger(result?.message_id))
           throw new Error("Telegram response invalid");
         transaction(db, () => {
           if (!owns()) throw new Error("Telegram lease lost");
           db.prepare(
-            "UPDATE telegram_outbox SET status='sent',message_id=? WHERE update_id=?",
-          ).run(result.message_id!, row.update_id);
+            `UPDATE ${table} SET status='sent',message_id=? WHERE ${where}`,
+          ).run(result.message_id!, ...keys);
           diagnostic(db, "telegram_sent", "confirmed");
         });
       } catch {
         if (owns())
           transaction(db, () => {
             db.prepare(
-              "UPDATE telegram_outbox SET status='unknown' WHERE update_id=?",
-            ).run(row.update_id);
+              `UPDATE ${table} SET status='unknown' WHERE ${where}`,
+            ).run(...keys);
+            db.prepare(
+              "UPDATE telegram_message_parts SET status='unknown' WHERE update_id=? AND part>? AND status='pending'",
+            ).run(row.update_id, row.part);
             diagnostic(db, "error", "telegram_send_unknown");
           });
         return;

@@ -1,3 +1,4 @@
+import { present, type Envelope } from "../telegram/presentation.js";
 import type { DatabaseSync } from "node:sqlite";
 import { groqClient, type NutritionMeal } from "./groq.js";
 import { recordServices, ValidationError } from "../services/records.js";
@@ -28,13 +29,14 @@ type Prepared = {
   replaceId?: number;
   replaceBefore?: string;
   error?: boolean;
+  diagnosticText?: string;
 };
 export type CoachHandler = {
   prepare(text: string, updateId: number): Promise<Prepared>;
   apply(
     prepared: Prepared,
     updateId: number,
-  ): { outcome: string; reply: string };
+  ): { outcome: string; reply: string; messages?: Envelope[] };
 };
 export function coachCommands(
   db: DatabaseSync,
@@ -71,7 +73,23 @@ export function coachCommands(
         error: true,
       };
     try {
-      if (lower === "accetta" || lower.startsWith("accetta allenamento ")) {
+      if (lower === "diagnostica") {
+        const r = await readiness(),
+          p = selectWorkout(db, r, clock());
+        prepared = {
+          kind: "diagnostics",
+          text,
+          diagnosticText: `Stato: ${r.assessmentState} · Readiness ${r.score ?? "n/d"} · confidence ${r.confidence}/100\n\nFattori:\n${r.factors
+            .filter((f) => f.category !== "activity")
+            .map((f) => `${f.code} [${f.evidence}]: ${f.text}`)
+            .join(
+              "\n",
+            )}\n\nPrescrizione, regole in ordine:\n${p.constraints.map((c) => `${c.code}: ${c.before} → ${c.after}${c.applied ? " (applicata)" : ""} — ${c.text}`).join("\n")}\n\nAnalisi attività e dettaglio completo disponibili nella dashboard.`,
+        };
+      } else if (
+        lower === "accetta" ||
+        lower.startsWith("accetta allenamento ")
+      ) {
         const specified = lower.slice("accetta allenamento ".length),
           row =
             lower === "accetta"
@@ -255,7 +273,11 @@ export function coachCommands(
       lower = text.toLowerCase();
     let reply = "Comando non riconosciuto. Usa home per il menu.",
       outcome = p.kind;
-    if (p.kind === "error" || p.kind === "reply") reply = p.text;
+    if (p.kind === "diagnostics") reply = p.diagnosticText!;
+    else if (lower === "modifica bozza")
+      reply =
+        "Invia una descrizione completa sostitutiva con date, alimenti e quantità. La bozza attuale rimane aperta finché arriva la nuova anteprima; i vecchi pulsanti non confermeranno la nuova bozza.";
+    else if (p.kind === "error" || p.kind === "reply") reply = p.text;
     else if (p.kind === "nutrition") {
       db.prepare(
         "INSERT INTO nutrition_drafts VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,created_at=excluded.created_at",
@@ -461,12 +483,7 @@ export function coachCommands(
     db.prepare(
       "INSERT INTO app_state VALUES('data_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1",
     ).run();
-    // Telegram text limit is enforced without dropping the confirmation instructions.
-    if (reply.length > 3900)
-      reply =
-        reply.slice(0, 3500) +
-        "\n[… dettaglio abbreviato; tutti i dati validati sono nella bozza.]\naccetta pasto conferma; annulla elimina; invia una descrizione sostitutiva per correggere.";
-    return { outcome, reply };
+    return { outcome, reply, messages: present(reply, id, p.kind) };
   }
   return { prepare, apply };
 }

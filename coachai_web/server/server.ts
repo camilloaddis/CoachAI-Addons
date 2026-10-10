@@ -1,3 +1,5 @@
+import { telemetry, compareActivities } from "./readiness/telemetry.js";
+import { selectWorkout } from "./coach/training.js";
 import { trainingConfig } from "./coach/training.js";
 import { coachCommands } from "./coach/commands.js";
 import { intervalsWorker } from "./coach/intervals.js";
@@ -282,7 +284,7 @@ export async function createApp(
     intervalsWriteEnabled: runtime.intervalsWriteEnabled ?? false,
     database: existsSync(dbPath),
     ...snapshot(),
-    version: "0.5.0",
+    version: "0.6.0",
   }));
   app.get("/api/overview", async () => {
     const availability = {
@@ -290,10 +292,36 @@ export async function createApp(
       meals: tableExists("meals"),
       daily_summary: tableExists("daily_summary"),
     };
+    const hasPayload = tableExists("activity_processing");
     const activities = availability.training_activities
       ? safeQuery<Record<string, unknown>>(
-          "SELECT activity_date, name, category, duration_min, training_load, avg_power FROM training_activities ORDER BY activity_date DESC, activity_id DESC LIMIT 12",
+          `SELECT a.activity_id,a.activity_date,a.name,a.category,a.duration_min,a.training_load,a.avg_power,${hasPayload ? "p.payload" : "NULL AS payload"} FROM training_activities a ${hasPayload ? "LEFT JOIN activity_processing p USING(activity_id)" : ""}`,
         )
+          .map((row) => {
+            let raw = {};
+            try {
+              raw = JSON.parse(String(row.payload));
+            } catch {
+              /* old snapshot */
+            }
+            const { payload, ...a } = row;
+            return { ...a, activity_id:String(a.activity_id),activity_date:String(a.activity_date),startLocal: telemetry(raw ?? {}).startLocal };
+          })
+          .sort((a, b) =>
+            compareActivities(
+              {
+                id: String(a.activity_id),
+                date: String(a.activity_date),
+                startLocal: a.startLocal,
+              },
+              {
+                id: String(b.activity_id),
+                date: String(b.activity_date),
+                startLocal: b.startLocal,
+              },
+            ),
+          )
+          .slice(0, 12)
       : [];
     const meals = availability.meals
       ? safeQuery<Record<string, unknown>>(
@@ -305,7 +333,17 @@ export async function createApp(
           "SELECT date, weight, calories_in, protein_g, carbs_g, fat_g, exercise_kcal, training_load FROM daily_summary ORDER BY date DESC LIMIT 30",
         )
       : [];
+    const evaluated = await readiness();
+    const prescription =
+      runtime.dataSource === "local" && store
+        ? selectWorkout(store, evaluated, options.clock?.() ?? new Date())
+        : {
+            recommendation: evaluated.recommendation,
+            constraints: evaluated.constraints,
+            limitingFactors: evaluated.constraints.filter((c) => c.ceiling < 5),
+          };
     return {
+      prescription,
       status: database() ? "ready" : "waiting_for_snapshot",
       ...snapshot(),
       dataSource: runtime.dataSource,
@@ -313,7 +351,7 @@ export async function createApp(
       activities,
       meals,
       daily,
-      readiness: await readiness(),
+      readiness: evaluated,
       history: history.read(),
     };
   });

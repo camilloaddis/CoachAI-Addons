@@ -49,7 +49,11 @@ export function integrity(db: DatabaseSync) {
   )
     throw new Error("Database integrity failed");
 }
-const migrations = ["001_initial.sql", "002_coach_services.sql"];
+const migrations = [
+  "001_initial.sql",
+  "002_coach_services.sql",
+  "003_telegram_envelopes.sql",
+];
 export function openStore(
   path: string,
   migrationDirectory = fileURLToPath(new URL("./migrations/", import.meta.url)),

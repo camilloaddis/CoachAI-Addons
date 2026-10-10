@@ -1,6 +1,14 @@
+import { readSnapshot } from "../readiness/sources.js";
+import { assessIntensity } from "../readiness/intensity.js";
 import type { DatabaseSync } from "node:sqlite";
 import { catalog } from "./catalog.js";
-import { validDate, today, shift, type Result } from "../readiness/types.js";
+import {
+  validDate,
+  today,
+  shift,
+  type Result,
+  type Constraint,
+} from "../readiness/types.js";
 import { ProviderError } from "./http.js";
 export function trainingConfig(db: DatabaseSync) {
   const row = db.prepare("SELECT * FROM training_config WHERE id=1").get();
@@ -137,37 +145,125 @@ export function selectWorkout(
     "VO2max",
   ];
   let level = rank.indexOf(result.recommendation);
-  if (result.score === null || result.confidence < 75 || week === null)
-    level = Math.min(level, 2);
-  if (phase === "scarico") level = Math.min(level, 2);
-  if (phase === "base" || phase === "costruzione") level = Math.min(level, 4);
+  const constraints: Constraint[] = (result.constraints ?? []).map((c) => ({
+    ...c,
+  }));
+  function limit(
+    code: string,
+    category: Constraint["category"],
+    evidence: Constraint["evidence"],
+    ceiling: number,
+    text: string,
+  ) {
+    const before = level;
+    level = Math.min(level, ceiling);
+    constraints.push({
+      code,
+      category,
+      evidence,
+      ceiling,
+      text,
+      polarity:
+        evidence === "missing" || evidence === "inferred"
+          ? "uncertain"
+          : evidence === "measured"
+            ? "negative"
+            : "neutral",
+      before,
+      after: level,
+      applied: level < before,
+      source: "training",
+    });
+  }
+  if (result.score === null || result.confidence < 75)
+    limit(
+      "training_confidence",
+      "data",
+      "missing",
+      2,
+      "Score assente o confidence sotto 75: massimo endurance.",
+    );
+  if (week === null)
+    limit(
+      "plan_start_unknown",
+      "plan",
+      "missing",
+      2,
+      "Inizio piano non configurato: massimo endurance.",
+    );
+  if (phase === "scarico")
+    limit("taper", "plan", "policy", 2, "Fase scarico: massimo endurance.");
+  if (phase === "base" || phase === "costruzione")
+    limit(
+      "early_phase",
+      "plan",
+      "policy",
+      4,
+      "Base/costruzione: massimo Sweet Spot/soglia.",
+    );
   const recent = result.metrics.intensityAssessments.filter(
-    (a) => a.date >= shift(date, -2) && a.status !== "non_determinabile",
-  );
-  if (recent.length) level = Math.min(level, 2);
-  const high = result.metrics.intensityAssessments.some(
     (a) =>
-      a.date >= shift(date, -3) &&
-      a.reasons.some((r) => /vo2|sprint|anaerob/i.test(r)),
+      a.date >= shift(date, -2) &&
+      a.isHard !== false &&
+      a.status !== "non_determinabile",
   );
-  if (high) level = Math.min(level, 4);
+  if (recent.length)
+    limit(
+      "training_recent_intensity",
+      "activity",
+      recent.some((a) => a.evidence !== "measured") ? "inferred" : "measured",
+      2,
+      "Intensità confermata/probabile oggi o nei due giorni precedenti: massimo endurance.",
+    );
+  const high = result.metrics.intensityAssessments.some(
+    (a) => a.date >= shift(date, -3) && a.highIntensity === true,
+  );
+  if (high)
+    limit(
+      "high_intensity_72h",
+      "activity",
+      "inferred",
+      4,
+      "Stimolo alta intensità oggi o nei tre giorni precedenti: evitare VO2max.",
+    );
   const load48 = db
     .prepare(
       "SELECT COUNT(*) n,SUM(training_load) total FROM training_activities WHERE activity_date BETWEEN ? AND ?",
     )
     .get(shift(date, -1), date)!;
-  if (Number(load48.total) >= 95) level = Math.min(level, 2);
-  const names = db
-    .prepare("SELECT name FROM training_activities WHERE activity_date>=?")
-    .all(shift(date, -10))
-    .map((r) => String(r.name || ""));
+  if (Number(load48.total) >= 95)
+    limit(
+      "load48_high",
+      "load",
+      "measured",
+      2,
+      "Carico osservato oggi/ieri ≥95: massimo endurance.",
+    );
+  const names = readSnapshot(db, date, now)
+    .activities.filter(
+      (a) => a.date >= shift(date, -10) && assessIntensity(a).isHard !== false,
+    )
+    .map((a) => a.name ?? "");
   if (
     level >= 4 &&
     names.filter((n) => /sweet spot|threshold|soglia/i.test(n)).length >= 2 &&
     !names.some((n) => /tempo|sfr/i.test(n))
   )
-    level = 3;
-  if (request === "leggero") level = Math.min(level, 2);
+    limit(
+      "quality_rotation",
+      "plan",
+      "inferred",
+      3,
+      "Due nomi di sedute SS/soglia in dieci giorni: rotazione prudenziale verso tempo/forza (esecuzione non confermata dal nome).",
+    );
+  if (request === "leggero")
+    limit(
+      "lighter_request",
+      "request",
+      "policy",
+      2,
+      "Richiesta leggero: massimo endurance.",
+    );
   const requested = /vo2/i.test(request)
     ? 5
     : /\b(ss|soglia|sweet spot)\b/i.test(request)
@@ -178,8 +274,28 @@ export function selectWorkout(
           ? 1
           : /endurance/i.test(request)
             ? 2
-            : level;
-  level = Math.min(level, requested); // Requests can lower the ceiling; never override recovery.
+            : request === "intenso"
+              ? 5
+              : result.score === null
+                ? 1
+                : result.score < 35
+                  ? 0
+                  : result.score < 50
+                    ? 1
+                    : result.score < 65
+                      ? 2
+                      : result.score < 75
+                        ? 3
+                        : result.score < 85
+                          ? 4
+                          : 5;
+  limit(
+    "request_ceiling",
+    "request",
+    "policy",
+    requested,
+    "La richiesta può ridurre il carico, non superare i vincoli di recupero.",
+  );
   const ceiling = [0, 60, 75, 100, 105, 130][level];
   let candidates = catalog.filter((w) =>
     level === 0
@@ -230,6 +346,22 @@ export function selectWorkout(
         Math.abs(templateDuration(b.structure) - config.duration) ||
       a.name.localeCompare(b.name),
   );
+  if (level > 2 && !matching.length) {
+    limit(
+      "catalog_unavailable",
+      "plan",
+      "policy",
+      2,
+      "Nessuna struttura della categoria richiesta compatibile con durata e picco: endurance controllata.",
+    );
+    candidates = catalog.filter(
+      (w) =>
+        /^Endurance/.test(w.name) &&
+        templateDuration(w.structure) <= config.duration &&
+        peakPower(w.structure) <= 75,
+    );
+  }
+  for (const c of constraints) c.blocksRequested = c.ceiling < requested;
   const workout = candidates[0] || {
     name:
       level <= 1 ? "Recupero breve controllato" : "Endurance breve controllata",
@@ -238,6 +370,9 @@ export function selectWorkout(
   };
   return {
     workout,
+    requested: rank[requested],
+    constraints,
+    limitingFactors: constraints.filter((c) => c.blocksRequested),
     duration: templateDuration(workout.structure),
     config,
     week,
@@ -258,5 +393,8 @@ export type Proposal = ReturnType<typeof selectWorkout> & {
   explanation?: string;
 };
 export function renderWorkout(p: Proposal, id: string) {
-  return `Nome: ${p.workout.name}\nDurata Stimata: ${p.duration} min · FTP ${p.config.ftp} W\nPiano: ${p.week === null ? "inizio non configurato" : `${p.week}/${p.config.weeks}`} (${p.phase}). Obiettivo: ${p.config.goal}\nReadiness ${p.readiness ?? "n/d"}, confidence ${p.confidence}/100; CTL ${p.metrics.ctl ?? "n/d"}, ATL ${p.metrics.atl ?? "n/d"}, TSB ${p.metrics.tsb ?? "n/d"}.\n${p.reasons.slice(0, 3).join(" ")}${p.explanation ? `\nCommento AI: ${p.explanation}` : ""}\n[WORKOUT_START]\n${p.workout.structure}\n[WORKOUT_END]\nProposta ${id}. “accetta” carica su Intervals soltanto se la scrittura è abilitata. “leggero” riduce il carico.`;
+  const limiting = p.limitingFactors?.map((c) => c.text) ?? [];
+  const compact = [...new Set(limiting)].slice(0, 3);
+  const metric = (v: number | null) => (v === null ? "n/d" : v.toFixed(1));
+  return `Nome: ${p.workout.name}\nDurata Stimata: ${p.duration} min · FTP ${p.config.ftp} W\nPiano: ${p.week === null ? "inizio non configurato" : `${p.week}/${p.config.weeks}`} (${p.phase}). Obiettivo: ${p.config.goal}\nReadiness ${p.readiness ?? "n/d"}, confidence ${p.confidence}/100; CTL ${metric(p.metrics.ctl)}, ATL ${metric(p.metrics.atl)}, TSB ${metric(p.metrics.tsb)}.\n${compact.length ? "Limiti della richiesta:\n" + compact.join("\n") : "Nessun vincolo aggiuntivo alla richiesta."}${p.explanation ? `\nCommento AI: ${p.explanation}` : ""}\n[WORKOUT_START]\n${p.workout.structure}\n[WORKOUT_END]\nProposta ${id}. “accetta” carica su Intervals soltanto se la scrittura è abilitata. “leggero” riduce il carico.`;
 }
