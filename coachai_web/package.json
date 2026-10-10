@@ -1,10 +1,10 @@
 {
   "name": "coachai-web",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build && tsc -p tsconfig.server.json && node scripts/copy-migrations.mjs",
+    "build": "node scripts/clean-build.mjs && vite build && tsc -p tsconfig.server.json && node scripts/copy-migrations.mjs",
     "dev": "vite --host 0.0.0.0",
     "check": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "start": "node build/server.js",

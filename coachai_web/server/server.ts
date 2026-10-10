@@ -2,7 +2,9 @@ import { telemetryDiagnostics } from "./coach/telemetry-diagnostics.js";
 import { telemetry, compareActivities } from "./readiness/telemetry.js";
 import { selectWorkout } from "./coach/training.js";
 import { trainingConfig } from "./coach/training.js";
-import { coachCommands } from "./coach/commands.js";
+import { webServices } from "./services/web.js";
+import { ProviderError } from "./coach/http.js";
+import { ValidationError } from "./services/records.js";
 import { intervalsWorker } from "./coach/intervals.js";
 import { normalizeActivities } from "./readiness/sources.js";
 import { today, shift, type Wellness } from "./readiness/types.js";
@@ -15,8 +17,7 @@ import { pathToFileURL } from "node:url";
 import { readinessService } from "./readiness/service.js";
 import { historyStore } from "./history.js";
 import { openStore, separatePaths } from "./storage/database.js";
-import { runtimeConfig, type RuntimeConfig } from "./telegram/config.js";
-import { telegramWorker } from "./telegram/poller.js";
+import { runtimeConfig, type RuntimeConfig } from "./config.js";
 import { timingSafeEqual } from "node:crypto";
 import { intervalsConfig } from "./readiness/config.js";
 
@@ -25,7 +26,6 @@ export async function createApp(
     dbPath?: string;
     appDbPath?: string | null;
     runtime?: RuntimeConfig;
-    telegramFetcher?: typeof fetch;
     groqFetcher?: typeof fetch;
     historyPath?: string | null;
     intervalsKey?: string;
@@ -56,8 +56,6 @@ export async function createApp(
     store?.close();
     throw new Error("Local mode requires final import");
   }
-  if (runtime.telegramEnabled && !store)
-    throw new Error("Telegram requires application database");
 
   const dbPath = runtime.dataSource === "local" ? appDbPath! : snapshotPath;
   let db: DatabaseSync | null = null;
@@ -205,25 +203,70 @@ export async function createApp(
         options.clock,
       )
     : null;
-  const commands = store
-    ? coachCommands(
+  const web = store
+    ? webServices(
         store,
         runtime,
         readiness,
-        intervalSettings,
         options.groqFetcher ?? options.fetcher,
         options.clock,
       )
-    : undefined;
-  const worker = store
-    ? telegramWorker(
-        store,
-        runtime,
-        options.telegramFetcher,
-        options.clock,
-        commands,
-      )
     : null;
+  function authenticated(authorization?: string) {
+    const token = runtime.adminToken;
+    const supplied = authorization?.startsWith("Bearer ")
+      ? authorization.slice(7)
+      : "";
+    const left = Buffer.from(token),
+      right = Buffer.from(supplied);
+    return (
+      token.length >= 32 &&
+      left.length === right.length &&
+      timingSafeEqual(left, right)
+    );
+  }
+  app.get("/api/coach", async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    if (!authenticated(request.headers.authorization))
+      return reply.code(401).send({ error: "unauthorized" });
+    if (!web) return reply.code(503).send({ error: "database_unavailable" });
+    return web.state();
+  });
+  app.post<{ Params: { action: string }; Body: Record<string, unknown> }>(
+    "/api/coach/:action",
+    async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
+      if (!authenticated(request.headers.authorization))
+        return reply.code(401).send({ error: "unauthorized" });
+      if (!web || runtime.dataSource !== "local")
+        return reply.code(409).send({ error: "local_database_required" });
+      if (
+        !request.body ||
+        typeof request.body !== "object" ||
+        Array.isArray(request.body)
+      )
+        return reply.code(400).send({ error: "invalid_request" });
+      const key = request.headers["idempotency-key"];
+      if (typeof key !== "string")
+        return reply.code(400).send({ error: "idempotency_key_required" });
+      try {
+        return await web.mutate(request.params.action, request.body, key);
+      } catch (error) {
+        if (
+          error instanceof ValidationError ||
+          (error instanceof ProviderError &&
+            (error.code === "settings" || error.code.startsWith("nutrition_")))
+        )
+          return reply.code(400).send({
+            error:
+              error.message === "stale_proposal"
+                ? "stale_proposal"
+                : "invalid_request",
+          });
+        return reply.code(503).send({ error: "operation_unavailable" });
+      }
+    },
+  );
   function snapshot() {
     if (runtime.dataSource === "local")
       return { snapshotUpdatedAt: null, snapshotVerified: false };
@@ -277,10 +320,8 @@ export async function createApp(
   });
   app.addHook("onReady", async () => {
     sync?.start();
-    worker?.start();
   });
   app.addHook("onClose", async () => {
-    await worker?.stop();
     await sync?.stop();
     store?.close();
     db?.close();
@@ -294,13 +335,12 @@ export async function createApp(
     mode:
       runtime.dataSource === "local" ? "local_database" : "read_only_snapshot",
     applicationDatabase: Boolean(store),
-    telegramEnabled: runtime.telegramEnabled,
     groqEnabled: runtime.groqEnabled ?? false,
     intervalsSyncEnabled: runtime.intervalsSyncEnabled ?? false,
-    intervalsWriteEnabled: runtime.intervalsWriteEnabled ?? false,
+    intervalsWriteEnabled: false,
     database: existsSync(dbPath),
     ...snapshot(),
-    version: "0.6.1",
+    version: "0.7.0",
   }));
   app.get("/api/overview", async () => {
     const availability = {
@@ -346,7 +386,7 @@ export async function createApp(
       : [];
     const meals = availability.meals
       ? safeQuery<Record<string, unknown>>(
-          "SELECT date, meal_type, description, calories, protein_g, carbs_g, fat_g FROM meals ORDER BY date DESC, id DESC LIMIT 12",
+          "SELECT id,date, meal_type, description, calories, protein_g, carbs_g, fat_g FROM meals ORDER BY date DESC, id DESC LIMIT 12",
         )
       : [];
     const daily = availability.daily_summary

@@ -1,3 +1,4 @@
+import { assessIntensity } from "../readiness/intensity.js";
 import type { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
@@ -10,8 +11,7 @@ import { recordServices } from "../services/records.js";
 import { transaction, diagnostic } from "../storage/database.js";
 import { shift, today, validDate, number } from "../readiness/types.js";
 import { recalculate } from "./summaries.js";
-import { reconcileFeedback } from "./feedback.js";
-import type { RuntimeConfig } from "../telegram/config.js";
+import type { RuntimeConfig } from "../config.js";
 export function intervalsWorker(
   db: DatabaseSync,
   runtime: RuntimeConfig,
@@ -82,6 +82,142 @@ export function intervalsWorker(
       8388608,
     );
   }
+  async function enrich(
+    rows: Map<string, Record<string, unknown>>,
+    date: string,
+  ) {
+    if (!runtime.intervalsDetailsEnabled) return;
+    // Persistent budget/cooldown survives restart; no details for powerless rides or old history.
+    const budgetKey = "intervals_detail_budget";
+    let budget = { date, count: 0 };
+    try {
+      const saved = JSON.parse(String(state(budgetKey) || "null"));
+      if (saved?.date === date) budget = saved;
+    } catch {}
+    let calls = 0;
+    for (const [id, raw] of rows) {
+      let a;
+      try {
+        a = normalizeActivities([raw])[0];
+      } catch {
+        continue;
+      }
+      if (
+        a.date < shift(date, -6) ||
+        a.date > date ||
+        !["Ride", "VirtualRide"].includes(a.type || "") ||
+        (number(raw.icu_average_watts) === null &&
+          number(raw.icu_weighted_avg_watts) === null) ||
+        assessIntensity(a).status === "confermata" ||
+        a.executedIntervals
+      )
+        continue;
+      const key = "intervals_detail:" + id;
+      const fingerprint = createHash("sha256")
+        .update(JSON.stringify(raw))
+        .digest("hex");
+      let cache: {
+        fingerprint?: string;
+        retryAt?: number;
+        data?: Record<string, unknown>;
+      } = {};
+      try {
+        cache = JSON.parse(String(state(key) || "{}"));
+      } catch {}
+      if (
+        cache.retryAt &&
+        cache.retryAt > clock().getTime() &&
+        (!cache.data || cache.fingerprint === fingerprint)
+      ) {
+        if (cache.data) Object.assign(raw, cache.data);
+        continue;
+      }
+      if (
+        calls >= 2 ||
+        budget.count >= 10 ||
+        Number(state("intervals_detail_cooldown") || 0) > clock().getTime()
+      )
+        continue;
+      if (!owns()) throw new Error("lease_lost");
+      const wait =
+        Number(state("intervals_detail_last_call") || 0) +
+        1000 -
+        clock().getTime();
+      if (wait > 0)
+        await delay(Math.min(wait, 1000), undefined, { signal: abort.signal });
+      calls++;
+      budget.count++;
+      put(budgetKey, JSON.stringify(budget));
+      put("intervals_detail_last_call", String(clock().getTime()));
+      try {
+        const url = new URL(
+          `https://intervals.icu/api/v1/activity/${encodeURIComponent(id)}`,
+        );
+        url.searchParams.set("intervals", "true");
+        const guardedFetch: typeof fetch = async (input, init) => {
+          const response = await fetcher(input, init);
+          if ([401, 403, 429].includes(response.status)) {
+            const retryHeader = response.headers.get("retry-after");
+            const retrySeconds =
+              retryHeader === null ? NaN : Number(retryHeader);
+            const retry = Number.isFinite(retrySeconds)
+              ? retrySeconds * 1000
+              : Date.parse(retryHeader || "") - clock().getTime();
+            put(
+              "intervals_detail_cooldown",
+              String(
+                clock().getTime() +
+                  Math.max(21600000, Number.isFinite(retry) ? retry : 0),
+              ),
+            );
+          }
+          return response;
+        };
+        const detail = object(
+          await jsonRequest(
+            guardedFetch,
+            url,
+            {
+              headers: {
+                authorization:
+                  "Basic " +
+                  Buffer.from("API_KEY:" + config.key).toString("base64"),
+              },
+              signal: abort.signal,
+            },
+            8000,
+            1048576,
+          ),
+        );
+        if (String(detail.id) !== id) throw new Error("detail_identity");
+        if (number(detail.icu_ftp) !== null && number(detail.icu_ftp) !== a.ftp)
+          throw new Error("detail_ftp_mismatch");
+        const data: Record<string, unknown> = {};
+        // Keep groups as metadata, never add their power/time to the individual intervals.
+        for (const field of ["icu_intervals", "icu_groups"])
+          if (Array.isArray(detail[field])) data[field] = detail[field];
+        put(
+          key,
+          JSON.stringify({
+            fingerprint,
+            retryAt: clock().getTime() + 86400000,
+            data,
+          }),
+        );
+        Object.assign(raw, data);
+      } catch {
+        put(
+          key,
+          JSON.stringify({
+            fingerprint,
+            retryAt: clock().getTime() + 21600000,
+          }),
+        );
+        diagnostic(db, "error", "intervals_detail_unavailable");
+      }
+    }
+    // Cache does not accumulate the athlete's entire history.
+  }
   async function pollOnce() {
     if (!check()) return "disabled";
     if (running || !lease()) return "busy";
@@ -122,6 +258,7 @@ export function intervalsWorker(
           return [String(row.id).slice(0, 10), row] as const;
         }),
       );
+      await enrich(rawActivities, date);
       const activities = normalizeActivities([...rawActivities.values()]),
         wellness = normalizeWellness([...rawWellness.values()]);
       if (
@@ -226,7 +363,9 @@ export function intervalsWorker(
           affected.add(d);
         }
         for (const d of affected) recalculate(db, d);
-        reconcileFeedback(db, clock());
+        db.prepare(
+          "DELETE FROM app_state WHERE key LIKE 'intervals_detail:%' AND substr(key,18) NOT IN (SELECT activity_id FROM training_activities WHERE activity_date>=?)",
+        ).run(shift(date, -28));
         put("intervals_last_day", newest);
         put("intervals_catchup_next", newest < date ? shift(newest, 1) : "");
         put("intervals_synced_at", clock().toISOString());

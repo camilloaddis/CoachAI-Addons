@@ -417,9 +417,3 @@ export function selectWorkout(
 export type Proposal = ReturnType<typeof selectWorkout> & {
   explanation?: string;
 };
-export function renderWorkout(p: Proposal, id: string) {
-  const limiting = p.limitingFactors?.map((c) => c.text) ?? [];
-  const compact = [...new Set(limiting)].slice(0, 3);
-  const metric = (v: number | null) => (v === null ? "n/d" : v.toFixed(1));
-  return `Richiesta: ${p.requestCommand ?? p.requested}. ${p.requestSatisfied ? "Proposta compatibile con la richiesta." : `Richiesta non soddisfatta: alternativa ${p.recommendation}.`}\nNome: ${p.workout.name}\nDurata Stimata: ${p.duration} min · FTP ${p.config.ftp} W\nPiano: ${p.week === null ? "inizio non configurato" : `${p.week}/${p.config.weeks}`} (${p.phase}). Obiettivo: ${p.config.goal}\nReadiness ${p.readiness ?? "n/d"}, confidence ${p.confidence}/100; CTL ${metric(p.metrics.ctl)}, ATL ${metric(p.metrics.atl)}, TSB ${metric(p.metrics.tsb)}.\n${compact.length ? "Limiti della richiesta:\n" + compact.join("\n") : "Nessun vincolo aggiuntivo alla richiesta."}${p.explanation ? `\nCommento AI: ${p.explanation}` : ""}\n[WORKOUT_START]\n${p.workout.structure}\n[WORKOUT_END]\nProposta ${id}. “accetta” carica su Intervals soltanto se la scrittura è abilitata. “leggero” riduce il carico.`;
-}

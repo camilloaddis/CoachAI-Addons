@@ -1,4 +1,5 @@
 import type { Factor, Constraint, Result } from "../server/readiness/types.js";
+import { CoachWorkspace } from "./CoachWorkspace.js";
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
@@ -14,6 +15,7 @@ type Activity = {
   avg_power: number | null;
 };
 type Meal = {
+  id?: number;
   date: string;
   meal_type: string;
   description: string;
@@ -460,8 +462,9 @@ function App() {
             )}
           </div>
         </section>
+        <CoachWorkspace activities={data?.activities || []} meals={data?.meals || []} refresh={refresh} />
         <footer>
-          Coach AI Web 0.6.1 ·{" "}
+          Coach AI Web 0.7.0 ·{" "}
           {data?.dataSource === "local"
             ? "Database applicativo locale"
             : "Snapshot SQLite in sola lettura"}{" "}

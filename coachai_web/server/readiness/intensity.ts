@@ -8,6 +8,7 @@ export function assessIntensity(a: Activity): IntensityAssessment {
     highIntensity: false,
     evidence: "missing",
     reasons: [],
+    sessionType: null,
     measurements: {
       duration: a.duration,
       load: a.load,
@@ -30,6 +31,39 @@ export function assessIntensity(a: Activity): IntensityAssessment {
     result.evidence = "measured";
     result.reasons.push(reason);
   };
+  // Work averages establish sustained measured efforts, never absence of brief efforts.
+  if (
+    ftp !== null &&
+    a.executedIntervals &&
+    a.duration !== null &&
+    a.executedIntervals.reduce((s, i) => s + i.seconds, 0) <=
+      a.duration * 60 * 1.05
+  ) {
+    const work = a.executedIntervals.filter((i) => i.type === "WORK");
+    const seconds = (low: number, high: number, min: number) =>
+      work
+        .filter(
+          (i) =>
+            i.averagePower / ftp >= low &&
+            i.averagePower / ftp < high &&
+            i.seconds >= min,
+        )
+        .reduce((s, i) => s + i.seconds, 0);
+    if (seconds(1.1, 1.3, 60) >= 180) {
+      result.sessionType = "VO2max";
+      confirm(
+        true,
+        "Blocchi WORK eseguiti ≥110% FTP: stimolo compatibile con VO2max, non misura del consumo di ossigeno.",
+        true,
+      );
+    } else if (seconds(0.95, 1.1, 120) >= 300) {
+      result.sessionType = "threshold";
+      confirm(true, "Blocchi WORK eseguiti ≥95% FTP: lavoro di soglia.");
+    } else if (seconds(0.88, 0.95, 300) >= 600) {
+      result.sessionType = "sweet_spot";
+      confirm(true, "Blocchi WORK eseguiti 88–95% FTP: Sweet Spot sostenuto.");
+    }
+  }
   if (intensity !== null && intensity >= 85)
     confirm(true, `Intensità media ${intensity}% ≥85%.`, intensity >= 105);
   if (ftp !== null && np !== null && np / ftp >= 0.85)
@@ -51,10 +85,15 @@ export function assessIntensity(a: Activity): IntensityAssessment {
       `Potenza media eseguita ${avg} W ≥85% della FTP dell’attività.`,
       avg / ftp >= 1.05,
     );
+  if (a.powerZones && a.powerZoneMapping === "unverified_custom")
+    result.reasons.push(
+      "Tempi zona riconosciuti, ma confini personalizzati senza unità/mappatura verificata: nessuna conferma di intensità dalle etichette Z.",
+    );
   const totalSeconds = a.duration === null ? null : a.duration * 60;
   const zones = a.powerZones;
   if (
     zones &&
+    a.powerZoneMapping !== "unverified_custom" &&
     zones.length === 7 &&
     new Set(zones.map((z) => z.zone)).size === 7 &&
     totalSeconds !== null &&
@@ -102,6 +141,33 @@ export function assessIntensity(a: Activity): IntensityAssessment {
           high >= 60,
         );
     }
+  }
+  if (
+    result.status !== "confermata" &&
+    ftp !== null &&
+    a.executedIntervals &&
+    a.duration !== null &&
+    a.duration >= 20 &&
+    a.load !== null &&
+    a.executedIntervals.every(
+      (i) => i.type !== undefined && i.averagePower / ftp <= 0.75,
+    ) &&
+    Math.abs(
+      a.executedIntervals.reduce((s, i) => s + i.seconds, 0) - a.duration * 60,
+    ) <= Math.max(5, a.duration * 3)
+  ) {
+    result.status = "probabile";
+    result.isHard = false;
+    result.evidence = "inferred";
+    result.sessionType = a.executedIntervals.every(
+      (i) => i.averagePower / ftp <= 0.55,
+    )
+      ? "recovery"
+      : "endurance";
+    result.reasons.push(
+      "Segmenti eseguiti completi compatibili con recupero/endurance; le medie dei segmenti non escludono picchi brevi.",
+    );
+    return result;
   }
   if (
     result.status !== "confermata" &&

@@ -54,6 +54,7 @@ const migrations = [
   "002_coach_services.sql",
   "003_telegram_envelopes.sql",
   "004_feedback_context_edits.sql",
+  "005_web_recovery.sql",
 ];
 export function openStore(
   path: string,
@@ -107,15 +108,12 @@ export function openStore(
 export function diagnostic(
   db: DatabaseSync,
   category:
-    | "feedback_scheduled"
     | "activity_detected"
-    | "telegram_sent"
-    | "telegram_edited"
     | "feedback_received"
     | "meal_recorded"
     | "error"
     | "import"
-    | "telegram_received",
+    | "current_recovery",
   code: string,
 ) {
   db.prepare(

@@ -210,13 +210,16 @@ export function evaluate(input: Input): Result {
   } else missing.push("Sleep score odierno assente.");
   const feedbackContext = input.feedback.filter(
     (f) =>
-      validDate(f.activityDate) &&
-      f.activityDate <= date &&
+      (f.activityDate !== null
+        ? validDate(f.activityDate) && f.activityDate <= date
+        : f.context === "current") &&
       ((f.sensationDate !== null &&
         validDate(f.sensationDate) &&
         f.sensationDate >= shift(date, -2) &&
         f.sensationDate <= date) ||
-        (f.sensationDate === null && f.activityDate >= shift(date, -2))) &&
+        (f.sensationDate === null &&
+          f.activityDate !== null &&
+          f.activityDate >= shift(date, -2))) &&
       Number.isInteger(f.legs) &&
       f.legs >= 1 &&
       f.legs <= 5 &&
@@ -246,7 +249,7 @@ export function evaluate(input: Input): Result {
             ? "positive"
             : "neutral",
       context === "ambiguous" ? "inferred" : "subjective",
-      `Gambe ${f.legs}/5: ${context === "activity" ? "valutazione retrospettiva della seduta, non recupero attuale" : context === "current" ? "stato di recupero dichiarato" : "significato temporale non verificato"}; attività ${f.activityDate}, inserimento/ultima modifica ${f.updatedAt ?? "n/d"}, sensazione ${f.sensationDate ?? "non registrata"}.`,
+      `Gambe ${f.legs}/5: ${context === "activity" ? "valutazione retrospettiva della seduta, non recupero attuale" : context === "current" ? "stato di recupero dichiarato" : "significato temporale non verificato"}; ${context === "current" ? "riferimento recupero" : "attività"} ${context === "current" ? (f.sensationDate ?? "non registrato") : f.activityDate}, inserimento/ultima modifica ${f.updatedAt ?? "n/d"}, sensazione ${f.sensationDate ?? "non registrata"}.`,
     );
   }
   const ambiguous = feedbackContext.some(
@@ -334,6 +337,7 @@ export function evaluate(input: Input): Result {
       (f) =>
         f.context === "activity" &&
         f.legs <= 2 &&
+        f.activityDate !== null &&
         f.activityDate >= shift(date, -1),
     )
   )

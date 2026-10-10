@@ -14,8 +14,17 @@ export type Activity = {
   intensityFactor?: number | null;
   ftp?: number | null;
   averageHR?: number | null;
+  powerZoneBounds?: number[] | null;
+  powerZoneMapping?: "legacy_standard" | "unverified_custom" | null;
   powerZones?: { zone: number; seconds: number }[] | null;
-  executedIntervals?: { seconds: number; averagePower: number }[] | null;
+  executedIntervals?:
+    | {
+        seconds: number;
+        averagePower: number;
+        type?: "WORK" | "RECOVERY";
+        group?: string;
+      }[]
+    | null;
 };
 export type Wellness = {
   date: string;
@@ -27,7 +36,7 @@ export type Wellness = {
 };
 export type Feedback = {
   context?: "activity" | "current" | "ambiguous";
-  activityDate: string;
+  activityDate: string | null; // null for standalone recovery, never a fabricated activity
   updatedAt: string | null; // Last update instant, never claimed to be first insertion.
   updatedDate: string | null; // Europe/Rome date of that instant.
   sensationDate: string | null; // Only an explicitly stored observation date.
@@ -37,6 +46,13 @@ export type IntensityAssessment = {
   id: string;
   date: string;
   status: "confermata" | "probabile" | "non_determinabile";
+  sessionType?:
+    | "sweet_spot"
+    | "threshold"
+    | "VO2max"
+    | "endurance"
+    | "recovery"
+    | null;
   reasons: string[];
   measurements?: {
     duration: number | null;

@@ -161,20 +161,32 @@ export function readSnapshot(
           .all(shift(date, -2), date) as Row[];
         records.push(...current);
       }
+      if (columns("recovery_observations").has("observation_date")) {
+        records.push(
+          ...(db
+            .prepare(
+              "SELECT NULL AS activity_date,legs,updated_at,observation_date AS sensation_date,'current' AS context FROM recovery_observations WHERE observation_date BETWEEN ? AND ?",
+            )
+            .all(shift(date, -2), date) as Row[]),
+        );
+      }
       for (const r of records) {
         const legs = number(r.legs, 1, 5),
-          activityDate = String(r.activity_date);
+          activityDate =
+            r.activity_date === null ? null : String(r.activity_date);
         const timestamp = feedbackTimestamp(r.updated_at);
         if (
           legs === null ||
           !Number.isInteger(legs) ||
-          !validDate(activityDate)
+          (activityDate === null
+            ? r.context !== "current"
+            : !validDate(activityDate))
         )
           continue;
         if (
           timestamp.updatedAt &&
           (Date.parse(timestamp.updatedAt) > now.getTime() ||
-            timestamp.updatedDate! < activityDate ||
+            (activityDate !== null && timestamp.updatedDate! < activityDate) ||
             timestamp.updatedDate! > date)
         ) {
           issues.push(

@@ -410,3 +410,14 @@ details ol small {
   margin-top: 1rem;
   padding-top: 1rem;
 }
+
+.coach-workspace { margin-top: 24px; padding: 24px; }
+.coach-fields { border: 0; padding: 0; min-width: 0; }
+.web-form { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin: 16px 0; }
+.web-form label { display: flex; flex-direction: column; gap: 6px; flex: 1 1 180px; }
+.web-form input, .web-form select, .coach-workspace textarea { padding: 10px; border: 1px solid #9ca3af; border-radius: 6px; background: white; color: #15212b; max-width: 100%; }
+.coach-workspace button { margin: 4px; }
+.coach-workspace textarea { width: 100%; min-height: 90px; }
+.coach-workspace pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.coach-workspace details { margin-top: 20px; }
+@media(max-width:600px) { .coach-workspace { padding: 16px; } .web-form label { flex-basis: 100%; } }

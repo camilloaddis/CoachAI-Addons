@@ -1,7 +1,7 @@
 name: Coach AI Web
-version: "0.6.1"
+version: "0.7.0"
 slug: coachai_web
-description: Dashboard e servizi Coach AI, Telegram disabilitato per default
+description: "Coach autonomo web: allenamento, recupero e diario alimentare"
 arch:
   - amd64
 startup: application
@@ -24,12 +24,9 @@ options:
   groq_api_key: ""
   groq_model: "openai/gpt-oss-120b"
   intervals_sync_enabled: false
-  intervals_write_enabled: false
+  intervals_details_enabled: false
   intervals_poll_seconds: 900
-  telegram_enabled: false
   node_red_stopped: false
-  telegram_bot_token: ""
-  telegram_chat_id: ""
   admin_api_token: ""
   data_source: snapshot
 schema:
@@ -39,11 +36,8 @@ schema:
   groq_api_key: password
   groq_model: str
   intervals_sync_enabled: bool
-  intervals_write_enabled: bool
+  intervals_details_enabled: bool
   intervals_poll_seconds: int(60,86400)
-  telegram_enabled: bool
   node_red_stopped: bool
-  telegram_bot_token: password
-  telegram_chat_id: str
   admin_api_token: password
   data_source: list(snapshot|local)
