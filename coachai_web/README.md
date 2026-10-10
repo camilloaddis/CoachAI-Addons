@@ -1,17 +1,15 @@
-# Coach AI Web
+# Coach AI Web 0.5.0
 
-Dashboard React/Fastify con Readiness Engine, porta 8099. Richiede Home Assistant OS amd64 e uno snapshot SQLite consistente in `/share/coachai/cycling_coach.db`. Il mount e l'accesso SQLite sono in sola lettura. Lo snapshot non è incluso nel pacchetto.
+Dashboard React/Fastify con Readiness Engine, diario alimentare e servizi persistenti. Home Assistant OS amd64, Node.js 24, porta 8099. Home Assistant costruisce l'immagine dal Dockerfile e dal lockfile inclusi; nessun database o credenziale è distribuito.
 
-Per Intervals.icu configura `intervals_athlete_id` e `intervals_api_key` nel campo password dell'add-on. L'integrazione è opzionale ed esegue solo GET. Non inserire credenziali in questo repository. Lo schema dei feedback non conserva la data della sensazione; le limitazioni dei dati sono mostrate nella dashboard.
+Per default legge soltanto lo snapshot consistente `/share/coachai/cycling_coach.db` con mount read-only. Il nuovo database `/data/coachai.db` è separato e persistente; storico Readiness conservato senza ricostruire punteggi passati. Dashboard senza login: soltanto rete LAN fidata, senza port forwarding. API diagnostiche richiedono Bearer amministrativo >=32 caratteri, nessun endpoint di scrittura HTTP.
 
-La sostituzione atomica dello snapshot viene rilevata senza riavvio. La dashboard non ha login: usa soltanto una rete locale fidata, senza port forwarding. Nessun Telegram, scheduler o scrittura su Intervals o database di allenamento. Lo storico delle valutazioni è separato in /data/coachai/readiness-history.sqlite.
+Telegram, Groq, acquisizione automatica e scrittura Intervals sono **disabilitati per default**. L'installazione non sostituisce Node-RED né avvia il bot. Le GET Readiness Intervals preesistenti restano opzionali quando si configurano athlete ID e API key.
 
-L'immagine viene costruita localmente da Home Assistant usando il Dockerfile incluso, Node.js 24 e il lockfile delle dipendenze. `dist`, `build` e `node_modules` sono generati nell'immagine, non distribuiti nel repository.
+Per un futuro passaggio seguire la guida privata: schema/conteggi reali, importazione preliminare, arresto verificato del vecchio consumer e delle scritture, snapshot finale Online Backup API, importazione definitiva verificata, cursore update_id inizializzato offline e modalità local. Non copiare un SQLite in uso e non avviare due consumer Telegram. Non modificare il database sorgente. `node_red_stopped` è una dichiarazione amministrativa, non un rilevatore del bot esterno.
 
-## Coach AI Web 0.4.0
+Credenziali solo nelle opzioni password: `intervals_api_key`, `telegram_bot_token`, `groq_api_key`, `admin_api_token`. `groq_model` default openai/gpt-oss-120b. `groq_enabled`, `intervals_sync_enabled`, `intervals_write_enabled`, `telegram_enabled`: false; polling default 900 secondi. Il worker Intervals e Telegram richiedono importazione definitiva, modalità local e vecchio consumer fermo. La chiave Groq non arriva al frontend.
 
-Crea `/data/coachai.db` persistente separato dallo snapshot e conserva lo storico Readiness. Per default `data_source: snapshot`, `telegram_enabled: false`, `node_red_stopped: false`, credenziali vuote. Nessun bot, sincronizzazione Node-RED o endpoint HTTP di scrittura viene attivato automaticamente. Il mount `/share` rimane in sola lettura.
+Il diario produce stime da confermare con `accetta pasto`, gestisce `annulla`, `pasti DATA`, correzioni e cancellazioni. `settimana` termina a ieri. `allenamento` seleziona strutture deterministiche con FTP configurabile (220 W di riferimento), otto settimane e guardrail conservativi; AI spiega la decisione, non cambia il workout. `accetta` carica un evento solo con scrittura Intervals esplicitamente abilitata.
 
-Le opzioni Telegram vanno configurate solo al passaggio amministrativo: importazione definitiva validata, vecchio consumer fermo, modalità local, cursore update_id inizializzato offline e chat privata autorizzata. `telegram_bot_token` e `admin_api_token` sono password nelle opzioni Home Assistant; non inserirli nel repository o nei log. Le API diagnostiche richiedono un token amministrativo di almeno 32 caratteri.
-
-La versione prepara i servizi persistenti; non replica ancora parsing nutrizionale AI, scheduler attività o ricalcolo dei nuovi riepiloghi del vecchio Coach. Importazione reale e passaggio richiedono la guida privata del repository sorgente e la verifica dello schema/conteggi reali. Mai avviare due consumer Telegram sullo stesso token.
+Richieste gambe per Ride/VirtualRide recenti non commuting, anche senza evento pianificato. Gli invii incerti e i flag storici non provano consegna: richiedono verifica manuale e non vengono duplicati automaticamente. I feedback retrospettivi non sono misure fisiologiche odierne. Menù testuali, piano futuro condizionale e assenza di verifica Garmin sono limiti espliciti; non si dichiara parità perfetta con ogni interazione Node-RED.

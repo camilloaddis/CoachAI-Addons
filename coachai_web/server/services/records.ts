@@ -160,7 +160,7 @@ export function recordServices(
       });
     return nested(work, inTransaction);
   }
-  function activity(input: ActivityInput, key: string) {
+  function activity(input: ActivityInput, key: string, inTransaction = false) {
     if (!input || typeof input !== "object" || Array.isArray(input)) fail();
     const id = text(input.activity_id, 200),
       date = text(input.activity_date, 10);
@@ -181,21 +181,23 @@ export function recordServices(
       intensity:
         input.intensity === undefined ? null : numeric(input.intensity, 300),
     };
-    return transaction(db, () =>
-      once("activity", key, value, () => {
-        db.prepare(
-          "INSERT INTO training_activities(activity_id,activity_date,name,category,duration_min,training_load,intensity) VALUES(?,?,?,?,?,?,?) ON CONFLICT(activity_id) DO UPDATE SET activity_date=excluded.activity_date,name=COALESCE(excluded.name,training_activities.name),category=COALESCE(excluded.category,training_activities.category),duration_min=COALESCE(excluded.duration_min,training_activities.duration_min),training_load=COALESCE(excluded.training_load,training_activities.training_load),intensity=COALESCE(excluded.intensity,training_activities.intensity)",
-        ).run(
-          id,
-          date,
-          value.name,
-          value.category,
-          value.duration_min,
-          value.training_load,
-          value.intensity,
-        );
-        diagnostic(db, "activity_detected", "recorded");
-      }),
+    return nested(
+      () =>
+        once("activity", key, value, () => {
+          db.prepare(
+            "INSERT INTO training_activities(activity_id,activity_date,name,category,duration_min,training_load,intensity) VALUES(?,?,?,?,?,?,?) ON CONFLICT(activity_id) DO UPDATE SET activity_date=excluded.activity_date,name=COALESCE(excluded.name,training_activities.name),category=COALESCE(excluded.category,training_activities.category),duration_min=COALESCE(excluded.duration_min,training_activities.duration_min),training_load=COALESCE(excluded.training_load,training_activities.training_load),intensity=COALESCE(excluded.intensity,training_activities.intensity)",
+          ).run(
+            id,
+            date,
+            value.name,
+            value.category,
+            value.duration_min,
+            value.training_load,
+            value.intensity,
+          );
+          diagnostic(db, "activity_detected", "recorded");
+        }),
+      inTransaction,
     );
   }
   return { meal, feedback, activity };

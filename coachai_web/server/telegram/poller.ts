@@ -7,6 +7,9 @@ import {
   ValidationError,
   type MealInput,
 } from "../services/records.js";
+import { ProviderError, readJsonResponse } from "../coach/http.js";
+import { flushFeedback, TelegramDeliveryRejected } from "../coach/feedback.js";
+import type { CoachHandler } from "../coach/commands.js";
 import type { RuntimeConfig } from "./config.js";
 
 export function telegramWorker(
@@ -14,6 +17,7 @@ export function telegramWorker(
   config: RuntimeConfig,
   fetcher: typeof fetch = fetch,
   clock: () => Date = () => new Date(),
+  handler?: CoachHandler,
 ) {
   const owner = randomUUID(),
     abort = new AbortController();
@@ -71,12 +75,84 @@ export function telegramWorker(
         signal: AbortSignal.any([abort.signal, AbortSignal.timeout(35000)]),
       },
     );
-    if (!response.ok) throw new Error("Telegram transport failed");
-    const parsed = (await response.json()) as { ok: boolean; result: unknown };
-    if (parsed.ok !== true) throw new Error("Telegram API failed");
+    const parsed = (await readJsonResponse(response)) as {
+      ok: boolean;
+      result: unknown;
+      error_code?: number;
+      parameters?: { retry_after?: number };
+    };
+    if (parsed.ok === false && [400, 403, 429].includes(parsed.error_code || 0))
+      throw new TelegramDeliveryRejected(
+        parsed.error_code === 429
+          ? Math.max(
+              60,
+              Math.min(86400, Number(parsed.parameters?.retry_after) || 60),
+            )
+          : null,
+      );
+    if (!response.ok || parsed.ok !== true)
+      throw new Error("Telegram API failed");
     return parsed.result;
   }
-  function process(update: Record<string, unknown>) {
+  async function process(update: Record<string, unknown>) {
+    const id = Number(update.update_id);
+    if (
+      id <= cursor() ||
+      db
+        .prepare("SELECT update_id FROM telegram_updates WHERE update_id=?")
+        .get(id)
+    )
+      return;
+    const callback = update.callback_query as
+      | {
+          id?: string;
+          data?: string;
+          message?: {
+            chat?: { id?: number; type?: string };
+            message_id?: number;
+          };
+          from?: { id?: number };
+        }
+      | undefined;
+    const input = (
+      callback
+        ? { chat: callback.message?.chat, text: callback.data }
+        : update.message
+    ) as { chat?: { id?: number; type?: string }; text?: string } | undefined;
+    const aliases: Record<string, string> = {
+      action_training: "allenamento",
+      action_plan: "pianifica",
+      action_meal: "pasto",
+      action_meals: "pasti",
+      action_today: "oggi",
+      action_yesterday: "ieri",
+      action_week: "settimana",
+      action_weight: "peso",
+      action_day: "giorno",
+      action_settings: "impostazioni",
+      action_close_day: "chiudi giornata",
+      action_reopen_day: "riapri giornata",
+      workout_intense: "intenso",
+      workout_easy: "leggero",
+    };
+    if (input?.text && aliases[input.text]) input.text = aliases[input.text];
+    if (callback && input?.text?.startsWith("legs|")) {
+      const request = db
+        .prepare("SELECT message_id FROM feedback_requests WHERE id=?")
+        .get(Number(input.text.split("|")[1]));
+      if (
+        request?.message_id !== callback.message?.message_id ||
+        String(callback.from?.id) !== config.chatId
+      )
+        input.text = undefined;
+    }
+    const authorized =
+      String(input?.chat?.id) === config.chatId &&
+      input?.chat?.type === "private" &&
+      typeof input?.text === "string";
+    const prepared =
+      handler && authorized ? await handler.prepare(input!.text!, id) : null;
+    if (!owns() || !acquire()) throw new Error("Telegram lease lost");
     transaction(db, () => {
       if (!owns()) throw new Error("Telegram lease lost");
       const id = Number(update.update_id);
@@ -87,7 +163,7 @@ export function telegramWorker(
           .get(id)
       )
         return;
-      const message = update.message as
+      const message = input as
         | { chat?: { id?: number; type?: string }; text?: string }
         | undefined;
       let outcome = "ignored",
@@ -99,7 +175,12 @@ export function telegramWorker(
       ) {
         const records = recordServices(db, clock);
         try {
-          if (message.text.startsWith("/pasto ")) {
+          db.exec("SAVEPOINT command_effects");
+          if (handler && prepared) {
+            const applied = handler.apply(prepared, id);
+            outcome = applied.outcome;
+            reply = applied.reply;
+          } else if (message.text.startsWith("/pasto ")) {
             const raw = JSON.parse(message.text.slice(7));
             if (!raw || typeof raw !== "object" || Array.isArray(raw))
               throw new ValidationError();
@@ -126,9 +207,12 @@ export function telegramWorker(
             reply =
               "Comandi disponibili: /pasto JSON oppure /gambe activity_id 1-5 [YYYY-MM-DD].";
           }
+          db.exec("RELEASE command_effects");
         } catch (error) {
+          db.exec("ROLLBACK TO command_effects; RELEASE command_effects");
           if (
             !(
+              error instanceof ProviderError ||
               error instanceof ValidationError ||
               error instanceof SyntaxError ||
               error instanceof TypeError
@@ -155,6 +239,13 @@ export function telegramWorker(
       if (outcome === "invalid")
         diagnostic(db, "error", "telegram_input_invalid");
     });
+    if (callback?.id && authorized) {
+      try {
+        await api("answerCallbackQuery", { callback_query_id: callback.id });
+      } catch {
+        diagnostic(db, "error", "telegram_callback_ack_failed");
+      }
+    }
   }
   async function flush() {
     // Interrupted sends cannot be safely retried: Telegram sendMessage has no idempotency key.
@@ -211,10 +302,11 @@ export function telegramWorker(
     if (!checkEnabled()) return "disabled";
     if (!acquire()) return "busy";
     await flush();
+    if (handler) await flushFeedback(db, clock(), owns, api, config.chatId);
     const result = await api("getUpdates", {
       offset: cursor() + 1,
       timeout: 25,
-      allowed_updates: ["message"],
+      allowed_updates: handler ? ["message", "callback_query"] : ["message"],
     });
     if (
       !Array.isArray(result) ||
@@ -225,7 +317,7 @@ export function telegramWorker(
       throw new Error("Invalid Telegram updates");
     if (!owns()) throw new Error("Telegram lease lost");
     for (const update of result.sort((a, b) => a.update_id - b.update_id))
-      process(update);
+      await process(update);
     if (!acquire()) throw new Error("Telegram lease lost");
     await flush();
     return "processed";

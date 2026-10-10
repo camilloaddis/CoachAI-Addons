@@ -1,3 +1,8 @@
+import { trainingConfig } from "./coach/training.js";
+import { coachCommands } from "./coach/commands.js";
+import { intervalsWorker } from "./coach/intervals.js";
+import { normalizeActivities } from "./readiness/sources.js";
+import { today, shift, type Wellness } from "./readiness/types.js";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import { DatabaseSync } from "node:sqlite";
@@ -18,6 +23,7 @@ export async function createApp(
     appDbPath?: string | null;
     runtime?: RuntimeConfig;
     telegramFetcher?: typeof fetch;
+    groqFetcher?: typeof fetch;
     historyPath?: string | null;
     intervalsKey?: string;
     athlete?: string;
@@ -49,9 +55,7 @@ export async function createApp(
   }
   if (runtime.telegramEnabled && !store)
     throw new Error("Telegram requires application database");
-  const worker = store
-    ? telegramWorker(store, runtime, options.telegramFetcher, options.clock)
-    : null;
+
   const dbPath = runtime.dataSource === "local" ? appDbPath! : snapshotPath;
   let db: DatabaseSync | null = null;
 
@@ -121,10 +125,63 @@ export async function createApp(
     options.fetcher,
     options.clock,
     revision,
+    () => {
+      if (
+        runtime.dataSource !== "local" ||
+        !store ||
+        !runtime.intervalsSyncEnabled
+      )
+        return null;
+      const now = options.clock?.() ?? new Date(),
+        date = today(now);
+      const synced = store
+        .prepare("SELECT value FROM app_state WHERE key='intervals_synced_at'")
+        .get()?.value;
+      const fresh =
+        typeof synced === "string" &&
+        now.getTime() - Date.parse(synced) >= 0 &&
+        now.getTime() - Date.parse(synced) <
+          (runtime.intervalsPollSeconds || 900) * 2000;
+      const complete =
+        store
+          .prepare(
+            "SELECT COUNT(*) n FROM activity_coverage WHERE date BETWEEN ? AND ? AND complete=1",
+          )
+          .get(shift(date, -28), date)?.n === 29;
+      if (!fresh || !complete)
+        return {
+          wellness: [],
+          activities: [],
+          historyComplete: false,
+          issues: [
+            "Cache Intervals incompleta o scaduta: nessun dato fisiologico sostitutivo.",
+          ],
+        };
+      return {
+        wellness: store
+          .prepare(
+            "SELECT payload FROM wellness_cache WHERE date BETWEEN ? AND ?",
+          )
+          .all(shift(date, -28), date)
+          .map((r) => JSON.parse(String(r.payload)) as Wellness),
+        activities: normalizeActivities(
+          store
+            .prepare(
+              "SELECT payload FROM activity_processing p JOIN training_activities a USING(activity_id) WHERE activity_date BETWEEN ? AND ? AND activity_type IN ('Ride','VirtualRide')",
+            )
+            .all(shift(date, -28), date)
+            .map((r) => JSON.parse(String(r.payload))),
+        ),
+        historyComplete: true,
+        issues: [],
+      };
+    },
   );
   let recorded: Awaited<ReturnType<typeof calculate>> | null = null;
   async function readiness() {
     const result = await calculate();
+    if (runtime.dataSource === "local" && store)
+      result.profile.ftp = trainingConfig(store).ftp;
     if (
       result !== recorded &&
       history.record(result, options.clock?.() ?? new Date())
@@ -132,6 +189,38 @@ export async function createApp(
       recorded = result;
     return result;
   }
+  const intervalSettings = {
+    key: options.intervalsKey ?? configured.key,
+    athlete: options.athlete ?? configured.athlete,
+  };
+  const sync = store
+    ? intervalsWorker(
+        store,
+        runtime,
+        intervalSettings,
+        options.fetcher,
+        options.clock,
+      )
+    : null;
+  const commands = store
+    ? coachCommands(
+        store,
+        runtime,
+        readiness,
+        intervalSettings,
+        options.groqFetcher ?? options.fetcher,
+        options.clock,
+      )
+    : undefined;
+  const worker = store
+    ? telegramWorker(
+        store,
+        runtime,
+        options.telegramFetcher,
+        options.clock,
+        commands,
+      )
+    : null;
   function snapshot() {
     if (runtime.dataSource === "local")
       return { snapshotUpdatedAt: null, snapshotVerified: false };
@@ -169,10 +258,12 @@ export async function createApp(
     };
   });
   app.addHook("onReady", async () => {
+    sync?.start();
     worker?.start();
   });
   app.addHook("onClose", async () => {
     await worker?.stop();
+    await sync?.stop();
     store?.close();
     db?.close();
     history.close();
@@ -186,9 +277,12 @@ export async function createApp(
       runtime.dataSource === "local" ? "local_database" : "read_only_snapshot",
     applicationDatabase: Boolean(store),
     telegramEnabled: runtime.telegramEnabled,
+    groqEnabled: runtime.groqEnabled ?? false,
+    intervalsSyncEnabled: runtime.intervalsSyncEnabled ?? false,
+    intervalsWriteEnabled: runtime.intervalsWriteEnabled ?? false,
     database: existsSync(dbPath),
     ...snapshot(),
-    version: "0.4.0",
+    version: "0.5.0",
   }));
   app.get("/api/overview", async () => {
     const availability = {

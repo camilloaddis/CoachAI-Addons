@@ -1,5 +1,5 @@
 name: Coach AI Web
-version: "0.4.0"
+version: "0.5.0"
 slug: coachai_web
 description: Dashboard e servizi Coach AI, Telegram disabilitato per default
 arch:
@@ -20,6 +20,12 @@ panel_icon: mdi:bike
 options:
   intervals_athlete_id: ""
   intervals_api_key: ""
+  groq_enabled: false
+  groq_api_key: ""
+  groq_model: "openai/gpt-oss-120b"
+  intervals_sync_enabled: false
+  intervals_write_enabled: false
+  intervals_poll_seconds: 900
   telegram_enabled: false
   node_red_stopped: false
   telegram_bot_token: ""
@@ -29,6 +35,12 @@ options:
 schema:
   intervals_athlete_id: str
   intervals_api_key: password
+  groq_enabled: bool
+  groq_api_key: password
+  groq_model: str
+  intervals_sync_enabled: bool
+  intervals_write_enabled: bool
+  intervals_poll_seconds: int(60,86400)
   telegram_enabled: bool
   node_red_stopped: bool
   telegram_bot_token: password

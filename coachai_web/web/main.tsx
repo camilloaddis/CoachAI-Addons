@@ -43,7 +43,7 @@ function App(){
       <section className="panel"><div className="panel-title"><h2>Ultimi riepiloghi</h2><span>Fino a 30 giorni</span></div>
         <div className="tablewrap"><table><thead><tr><th>Data</th><th>Calorie introdotte</th><th>Proteine</th><th>Attività kcal</th><th>Carico</th><th>Peso</th></tr></thead><tbody>{(data?.daily||[]).map(d=><tr key={d.date}><td>{date(d.date)}</td><td>{nf(d.calories_in)}</td><td>{nf(d.protein_g,' g')}</td><td>{nf(d.exercise_kcal)}</td><td>{nf(d.training_load)}</td><td>{nf(d.weight,' kg')}</td></tr>)}</tbody></table>{!data?.daily.length&&<p className="muted empty">Nessun riepilogo giornaliero disponibile.</p>}</div>
       </section>
-      <footer>Coach AI Web 0.4.0 · {data?.dataSource === 'local' ? 'Database applicativo locale' : 'Snapshot SQLite in sola lettura'} · Intervals opzionale, solo GET</footer>
+      <footer>Coach AI Web 0.5.0 · {data?.dataSource === 'local' ? 'Database applicativo locale' : 'Snapshot SQLite in sola lettura'} · Intervals opzionale, solo GET</footer>
     </main>
   </div>
 }

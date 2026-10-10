@@ -8,13 +8,18 @@ export function readinessService(
   fetcher: typeof fetch = fetch,
   clock: () => Date = () => new Date(),
   revision: () => string = () => "",
+  cachedRemote?: () => Awaited<ReturnType<typeof readIntervals>> | null,
 ) {
   let cache: { date: string; expires: number; result: Result } | null = null;
   let pending: { date: string; promise: Promise<Result> } | null = null;
   let lastRevision = "";
   return async (): Promise<Result> => {
     const next = revision();
-    if (next !== lastRevision) { cache = null; pending = null; lastRevision = next; }
+    if (next !== lastRevision) {
+      cache = null;
+      pending = null;
+      lastRevision = next;
+    }
     const now = clock(),
       date = today(now);
     if (cache?.date === date && cache.expires > now.getTime())
@@ -28,7 +33,8 @@ export function readinessService(
         /* handled as unavailable snapshot */
       }
       const local = readSnapshot(db, date, now),
-        remote = await readIntervals(date, config, fetcher);
+        remote =
+          cachedRemote?.() ?? (await readIntervals(date, config, fetcher));
       // Successful remote history is authoritative: no double-counting commuting or rides.
       const activities = remote.historyComplete
         ? remote.activities.map((a) => {
@@ -51,7 +57,8 @@ export function readinessService(
         historyComplete: remote.historyComplete,
         issues: [...local.issues, ...remote.issues],
       });
-      if (revision() === next) cache = { date, expires: now.getTime() + 60000, result };
+      if (revision() === next)
+        cache = { date, expires: now.getTime() + 60000, result };
       return result;
     })();
     pending = { date, promise };

@@ -1,5 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 export type RuntimeConfig = {
+  groqEnabled?: boolean;
+  groqKey?: string;
+  groqModel?: string;
+  intervalsSyncEnabled?: boolean;
+  intervalsWriteEnabled?: boolean;
+  intervalsPollSeconds?: number;
   telegramEnabled: boolean;
   nodeRedStopped: boolean;
   token: string;
@@ -24,7 +30,30 @@ export function runtimeConfig(
   const string = (key: string, variable: string) =>
     env[variable] ??
     (typeof options[key] === "string" ? (options[key] as string) : "");
+  const bool = (key: string, variable: string) =>
+    env[variable] === undefined
+      ? options[key] === true
+      : env[variable] === "true";
   return {
+    groqEnabled: bool("groq_enabled", "GROQ_ENABLED"),
+    groqKey: string("groq_api_key", "GROQ_API_KEY"),
+    groqModel: string("groq_model", "GROQ_MODEL") || "openai/gpt-oss-120b",
+    intervalsSyncEnabled: bool(
+      "intervals_sync_enabled",
+      "INTERVALS_SYNC_ENABLED",
+    ),
+    intervalsWriteEnabled: bool(
+      "intervals_write_enabled",
+      "INTERVALS_WRITE_ENABLED",
+    ),
+    intervalsPollSeconds: Math.max(
+      60,
+      Math.min(
+        86400,
+        Number(env.INTERVALS_POLL_SECONDS ?? options.intervals_poll_seconds) ||
+          900,
+      ),
+    ),
     telegramEnabled:
       env.TELEGRAM_ENABLED === undefined
         ? options.telegram_enabled === true
