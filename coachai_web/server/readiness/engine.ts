@@ -222,36 +222,44 @@ export function evaluate(input: Input): Result {
       f.legs <= 5 &&
       (!f.updatedDate || f.updatedDate <= date),
   );
-  const negativeFeedback = feedbackContext
+  const currentFeedback = feedbackContext.filter(
+    (f) => f.context === "current" && f.sensationDate !== null,
+  );
+  const negativeFeedback = currentFeedback
     .filter((f) => f.legs <= 2)
-    .sort(
-      (a, b) =>
-        Number(b.sensationDate !== null) - Number(a.sensationDate !== null) ||
-        (b.sensationDate ?? b.activityDate).localeCompare(
-          a.sensationDate ?? a.activityDate,
-        ),
-    )[0];
-  for (const f of feedbackContext)
+    .sort((a, b) => b.sensationDate!.localeCompare(a.sensationDate!))[0];
+  for (const f of feedbackContext) {
+    const context =
+      f.context === "activity"
+        ? "activity"
+        : f.context === "current" && f.sensationDate
+          ? "current"
+          : "ambiguous";
     factor(
-      "legs",
+      "legs_" + context,
       "feedback",
-      f.sensationDate
-        ? f.legs <= 2
+      context === "ambiguous"
+        ? "uncertain"
+        : f.legs <= 2
           ? "negative"
           : f.legs >= 4
             ? "positive"
-            : "neutral"
-        : "uncertain",
-      f.sensationDate ? "subjective" : "inferred",
-      `Gambe ${f.legs}/5: attività ${f.activityDate}, ultima modifica ${f.updatedAt ?? "non disponibile"}, giorno sensazione ${f.sensationDate ?? "non determinabile"} (Europe/Rome).`,
+            : "neutral",
+      context === "ambiguous" ? "inferred" : "subjective",
+      `Gambe ${f.legs}/5: ${context === "activity" ? "valutazione retrospettiva della seduta, non recupero attuale" : context === "current" ? "stato di recupero dichiarato" : "significato temporale non verificato"}; attività ${f.activityDate}, inserimento/ultima modifica ${f.updatedAt ?? "n/d"}, sensazione ${f.sensationDate ?? "non registrata"}.`,
     );
-  const ambiguous = feedbackContext.some((f) => f.sensationDate === null);
+  }
+  const ambiguous = feedbackContext.some(
+    (f) =>
+      (f.context ?? "ambiguous") === "ambiguous" ||
+      (f.context === "current" && !f.sensationDate),
+  );
   if (ambiguous)
     missing.push(
-      "Data della sensazione non memorizzata: feedback non utilizzabile come misurazione giornaliera.",
+      "Feedback ambiguo: non misura del recupero attuale; cautela fino a due giorni dalla data attività.",
     );
-  else if (!feedbackContext.length)
-    missing.push("Feedback recente disponibile assente.");
+  if (!currentFeedback.length)
+    missing.push("Feedback sul recupero attuale esplicito assente.");
   const historyReliable =
     input.historyComplete &&
     recent.every((a) => a.load !== null) &&
@@ -300,15 +308,41 @@ export function evaluate(input: Input): Result {
   if (ambiguous) confidence = Math.max(0, confidence - 5);
   if (negativeFeedback)
     limit(
-      negativeFeedback.sensationDate
-        ? "negative_legs"
-        : "ambiguous_negative_legs",
+      "negative_legs",
       "feedback",
-      negativeFeedback.sensationDate ? "subjective" : "inferred",
+      "subjective",
       1,
-      negativeFeedback.sensationDate
-        ? `Feedback negativo riferito esplicitamente al ${negativeFeedback.sensationDate}: recupero prudenziale.`
-        : "Feedback negativo con data della sensazione incerta: recupero prudenziale, senza attribuirlo al giorno dell’attività.",
+      `Recupero attuale negativo dichiarato per ${negativeFeedback.sensationDate}: recupero prudenziale, valido fino al ${shift(negativeFeedback.sensationDate!, 2)}.`,
+    );
+  if (
+    feedbackContext.some(
+      (f) =>
+        ((f.context ?? "ambiguous") === "ambiguous" ||
+          (f.context === "current" && !f.sensationDate)) &&
+        f.legs <= 2,
+    )
+  )
+    limit(
+      "ambiguous_feedback",
+      "feedback",
+      "inferred",
+      2,
+      "Feedback negativo dal significato incerto: massimo endurance nella finestra di due giorni dell’attività; non prova affaticamento attuale.",
+    );
+  if (
+    feedbackContext.some(
+      (f) =>
+        f.context === "activity" &&
+        f.legs <= 2 &&
+        f.activityDate >= shift(date, -1),
+    )
+  )
+    limit(
+      "retrospective_session",
+      "plan",
+      "subjective",
+      2,
+      "Seduta oggi/ieri percepita faticosa: pianificare endurance, non interpretare come recupero attuale. Carico misurato invariato; calibrazione soggettiva della seduta da verificare.",
     );
   if (load7 !== null) {
     factor(
@@ -362,9 +396,17 @@ export function evaluate(input: Input): Result {
       "activity",
       measured ? "measured" : "inferred",
       1,
-      `${consecutive} giornate consecutive con intensità confermata/probabile: interrompere la sequenza.`,
+      measured
+        ? `${consecutive} giornate consecutive con intensità misurata: interrompere la sequenza.`
+        : `${consecutive} giornate consecutive con intensità solo probabile: recupero cautelativo per incertezza, non prova di affaticamento attuale.`,
     );
-    add(35, 10);
+    if (measured) add(35, 10);
+    else {
+      confidence = Math.max(0, confidence - 5);
+      missing.push(
+        "Sequenza intensa solo probabile: esecuzione non verificata.",
+      );
+    }
   } else if (hard.has(date) || hard.has(shift(date, -1)))
     limit(
       "recent_intensity",
@@ -387,7 +429,7 @@ export function evaluate(input: Input): Result {
   const conflict =
     (negativeFeedback &&
       ((tsb !== null && tsb >= -10) || (sleep !== null && sleep >= 80))) ||
-    (feedbackContext.some((f) => f.legs >= 4) && tsb !== null && tsb < -20);
+    (currentFeedback.some((f) => f.legs >= 4) && tsb !== null && tsb < -20);
   if (conflict) {
     confidence = Math.max(0, confidence - 15);
     factor(
@@ -395,7 +437,7 @@ export function evaluate(input: Input): Result {
       "feedback",
       "uncertain",
       ambiguous ? "inferred" : "subjective",
-      "Dati oggettivi e feedback discordanti: prevale il segnale negativo, anche con semantica temporale incerta.",
+      "Dati oggettivi e feedback discordanti: prevale il segnale negativo attuale esplicitamente datato.",
     );
   }
   const score = weight

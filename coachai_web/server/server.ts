@@ -1,3 +1,4 @@
+import { telemetryDiagnostics } from "./coach/telemetry-diagnostics.js";
 import { telemetry, compareActivities } from "./readiness/telemetry.js";
 import { selectWorkout } from "./coach/training.js";
 import { trainingConfig } from "./coach/training.js";
@@ -239,6 +240,21 @@ export async function createApp(
     };
   }
   app.get("/api/readiness/history", async () => history.read());
+  app.get("/api/diagnostics/intervals", async (request, reply) => {
+    const token = runtime.adminToken,
+      supplied = request.headers.authorization?.replace(/^Bearer /, "") ?? "";
+    const left = Buffer.from(token),
+      right = Buffer.from(supplied);
+    if (
+      token.length < 32 ||
+      left.length !== right.length ||
+      !timingSafeEqual(left, right)
+    )
+      return reply.code(401).send({ error: "unauthorized" });
+    if (!store) return reply.code(503).send({ error: "database_unavailable" });
+    reply.header("Cache-Control", "no-store");
+    return telemetryDiagnostics(store, options.clock?.() ?? new Date());
+  });
   app.get("/api/diagnostics", async (request, reply) => {
     const token = runtime.adminToken,
       supplied = request.headers.authorization?.replace(/^Bearer /, "") ?? "";
@@ -284,7 +300,7 @@ export async function createApp(
     intervalsWriteEnabled: runtime.intervalsWriteEnabled ?? false,
     database: existsSync(dbPath),
     ...snapshot(),
-    version: "0.6.0",
+    version: "0.6.1",
   }));
   app.get("/api/overview", async () => {
     const availability = {
@@ -305,7 +321,12 @@ export async function createApp(
               /* old snapshot */
             }
             const { payload, ...a } = row;
-            return { ...a, activity_id:String(a.activity_id),activity_date:String(a.activity_date),startLocal: telemetry(raw ?? {}).startLocal };
+            return {
+              ...a,
+              activity_id: String(a.activity_id),
+              activity_date: String(a.activity_date),
+              startLocal: telemetry(raw ?? {}).startLocal,
+            };
           })
           .sort((a, b) =>
             compareActivities(

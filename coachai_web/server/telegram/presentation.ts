@@ -65,7 +65,7 @@ export function callbackAction(
   data: unknown,
 ): { id: number; action: string; command: string } | null {
   if (typeof data !== "string" || Buffer.byteLength(data) > 64) return null;
-  const m = /^c\|(0|[1-9]\d*)\|([a-z]+)$/.exec(data);
+  const m = /^c\|(0|[1-9]\d*)\|([a-z0-9]+)$/.exec(data);
   if (!m || !Number.isSafeInteger(Number(m[1])) || !Object.hasOwn(labels, m[2]))
     return null;
   const commands: Record<string, string> = {
@@ -78,7 +78,7 @@ export function callbackAction(
     weight: "peso",
     meals: "pasti oggi",
     accept: `accetta allenamento ${m[1]}`,
-    regen: "allenamento",
+    regen: "rigenera",
     light: "leggero",
     hard: "intenso",
     ss: "ss",

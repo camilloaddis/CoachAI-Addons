@@ -111,6 +111,7 @@ export function selectWorkout(
   result: Result,
   now: Date,
   request = "allenamento",
+  regenerate = false,
 ) {
   const config = trainingConfig(db),
     date = today(now);
@@ -264,31 +265,34 @@ export function selectWorkout(
       2,
       "Richiesta leggero: massimo endurance.",
     );
-  const requested = /vo2/i.test(request)
-    ? 5
-    : /\b(ss|soglia|sweet spot)\b/i.test(request)
-      ? 4
-      : /tempo|forza/i.test(request)
-        ? 3
-        : /recupero/i.test(request)
-          ? 1
-          : /endurance/i.test(request)
-            ? 2
-            : request === "intenso"
-              ? 5
-              : result.score === null
-                ? 1
-                : result.score < 35
-                  ? 0
-                  : result.score < 50
+  const requested =
+    request === "leggero"
+      ? 2
+      : /vo2/i.test(request)
+        ? 5
+        : /\b(ss|soglia|sweet spot)\b/i.test(request)
+          ? 4
+          : /tempo|forza/i.test(request)
+            ? 3
+            : /recupero/i.test(request)
+              ? 1
+              : /endurance/i.test(request)
+                ? 2
+                : request === "intenso"
+                  ? 5
+                  : result.score === null
                     ? 1
-                    : result.score < 65
-                      ? 2
-                      : result.score < 75
-                        ? 3
-                        : result.score < 85
-                          ? 4
-                          : 5;
+                    : result.score < 35
+                      ? 0
+                      : result.score < 50
+                        ? 1
+                        : result.score < 65
+                          ? 2
+                          : result.score < 75
+                            ? 3
+                            : result.score < 85
+                              ? 4
+                              : 5;
   limit(
     "request_ceiling",
     "request",
@@ -297,7 +301,15 @@ export function selectWorkout(
     "La richiesta può ridurre il carico, non superare i vincoli di recupero.",
   );
   const ceiling = [0, 60, 75, 100, 105, 130][level];
-  let candidates = catalog.filter((w) =>
+  const recoveryVariants = [20, 30, 45].map((minutes) => ({
+    name: `Recovery ${minutes} controllato`,
+    structure: `- ${minutes}m 45-55% power=3s`,
+    difficulty: 1,
+  }));
+  const pool = level === 1 ? recoveryVariants : catalog;
+  const targetDuration =
+    request === "leggero" ? Math.min(30, config.duration) : config.duration;
+  let candidates = pool.filter((w) =>
     level === 0
       ? w.difficulty === 0
       : w.difficulty > 0 &&
@@ -311,7 +323,9 @@ export function selectWorkout(
       : level === 2
         ? /^Endurance/.test(w.name)
         : level === 3
-          ? /^(Tempo|Threshold & SFR)/.test(w.name)
+          ? request === "forza"
+            ? /^Threshold & SFR/.test(w.name)
+            : /^(Tempo|Threshold & SFR)/.test(w.name)
           : level === 4
             ? /^(Sweet Spot|Threshold)/.test(w.name)
             : /^VO2Max/.test(w.name);
@@ -338,12 +352,16 @@ export function selectWorkout(
       used.set(a.name, String(a.activity_date));
   candidates.sort(
     (a, b) =>
+      (request === "leggero" && !regenerate
+        ? Math.abs(templateDuration(a.structure) - targetDuration) -
+          Math.abs(templateDuration(b.structure) - targetDuration)
+        : 0) ||
       Number(used.has(a.name)) - Number(used.has(b.name)) ||
       String(used.get(a.name) || "").localeCompare(
         String(used.get(b.name) || ""),
       ) ||
-      Math.abs(templateDuration(a.structure) - config.duration) -
-        Math.abs(templateDuration(b.structure) - config.duration) ||
+      Math.abs(templateDuration(a.structure) - targetDuration) -
+        Math.abs(templateDuration(b.structure) - targetDuration) ||
       a.name.localeCompare(b.name),
   );
   if (level > 2 && !matching.length) {
@@ -370,6 +388,13 @@ export function selectWorkout(
   };
   return {
     workout,
+    requestCommand: request,
+    requestSatisfied:
+      request === "leggero"
+        ? level <= 2
+        : ["allenamento", "pianifica"].includes(request)
+          ? true
+          : level === requested,
     requested: rank[requested],
     constraints,
     limitingFactors: constraints.filter((c) => c.blocksRequested),
@@ -396,5 +421,5 @@ export function renderWorkout(p: Proposal, id: string) {
   const limiting = p.limitingFactors?.map((c) => c.text) ?? [];
   const compact = [...new Set(limiting)].slice(0, 3);
   const metric = (v: number | null) => (v === null ? "n/d" : v.toFixed(1));
-  return `Nome: ${p.workout.name}\nDurata Stimata: ${p.duration} min · FTP ${p.config.ftp} W\nPiano: ${p.week === null ? "inizio non configurato" : `${p.week}/${p.config.weeks}`} (${p.phase}). Obiettivo: ${p.config.goal}\nReadiness ${p.readiness ?? "n/d"}, confidence ${p.confidence}/100; CTL ${metric(p.metrics.ctl)}, ATL ${metric(p.metrics.atl)}, TSB ${metric(p.metrics.tsb)}.\n${compact.length ? "Limiti della richiesta:\n" + compact.join("\n") : "Nessun vincolo aggiuntivo alla richiesta."}${p.explanation ? `\nCommento AI: ${p.explanation}` : ""}\n[WORKOUT_START]\n${p.workout.structure}\n[WORKOUT_END]\nProposta ${id}. “accetta” carica su Intervals soltanto se la scrittura è abilitata. “leggero” riduce il carico.`;
+  return `Richiesta: ${p.requestCommand ?? p.requested}. ${p.requestSatisfied ? "Proposta compatibile con la richiesta." : `Richiesta non soddisfatta: alternativa ${p.recommendation}.`}\nNome: ${p.workout.name}\nDurata Stimata: ${p.duration} min · FTP ${p.config.ftp} W\nPiano: ${p.week === null ? "inizio non configurato" : `${p.week}/${p.config.weeks}`} (${p.phase}). Obiettivo: ${p.config.goal}\nReadiness ${p.readiness ?? "n/d"}, confidence ${p.confidence}/100; CTL ${metric(p.metrics.ctl)}, ATL ${metric(p.metrics.atl)}, TSB ${metric(p.metrics.tsb)}.\n${compact.length ? "Limiti della richiesta:\n" + compact.join("\n") : "Nessun vincolo aggiuntivo alla richiesta."}${p.explanation ? `\nCommento AI: ${p.explanation}` : ""}\n[WORKOUT_START]\n${p.workout.structure}\n[WORKOUT_END]\nProposta ${id}. “accetta” carica su Intervals soltanto se la scrittura è abilitata. “leggero” riduce il carico.`;
 }

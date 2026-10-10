@@ -3,7 +3,13 @@ import type { DatabaseSync } from "node:sqlite";
 import { diagnostic, transaction } from "../storage/database.js";
 import { shift, today } from "../readiness/types.js";
 export class TelegramDeliveryRejected extends Error {
-  constructor(public readonly retrySeconds: number | null = null) {
+  constructor(
+    public readonly retrySeconds: number | null = null,
+    public readonly reason:
+      | "rejected"
+      | "not_modified"
+      | "cannot_edit" = "rejected",
+  ) {
     super("telegram_delivery_rejected");
   }
 }

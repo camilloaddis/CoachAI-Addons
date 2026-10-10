@@ -40,6 +40,7 @@ export type ActivityInput = {
   intensity?: number;
 };
 export type FeedbackInput = {
+  context?: "activity" | "current" | "ambiguous";
   activity_id: string;
   legs: number;
   sensation_date?: string;
@@ -129,7 +130,14 @@ export function recordServices(
           clock().toLocaleDateString("en-CA", { timeZone: "Europe/Rome" }))
     )
       fail();
+    const context = input.context ?? "ambiguous";
+    if (
+      !["activity", "current", "ambiguous"].includes(context) ||
+      (context === "current" && !input.sensation_date)
+    )
+      fail();
     const value = {
+      context,
       activity_id: id,
       legs: input.legs,
       note,
@@ -145,17 +153,31 @@ export function recordServices(
             .get(id)
         )
           throw new ValidationError("Unknown activity");
-        db.prepare(
-          "INSERT INTO training_feedback(activity_id,legs,note,updated_at,sensation_date,request_key,origin) VALUES(?,?,?,?,?,?,?) ON CONFLICT(activity_id) DO UPDATE SET legs=excluded.legs,note=excluded.note,updated_at=excluded.updated_at,sensation_date=excluded.sensation_date,request_key=excluded.request_key,origin=excluded.origin",
-        ).run(
-          id,
-          value.legs,
-          note,
-          clock().toISOString(),
-          value.sensation_date,
-          key,
-          "local",
-        );
+        if (context === "current") {
+          db.prepare(
+            "INSERT INTO recovery_feedback(request_key,activity_id,legs,observation_date,note,updated_at) VALUES(?,?,?,?,?,?)",
+          ).run(
+            key,
+            id,
+            value.legs,
+            value.sensation_date,
+            note,
+            clock().toISOString(),
+          );
+        } else {
+          db.prepare(
+            "INSERT INTO training_feedback(activity_id,legs,note,updated_at,sensation_date,request_key,origin,context) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(activity_id) DO UPDATE SET legs=excluded.legs,note=excluded.note,updated_at=excluded.updated_at,sensation_date=excluded.sensation_date,request_key=excluded.request_key,origin=excluded.origin,context=excluded.context",
+          ).run(
+            id,
+            value.legs,
+            note,
+            clock().toISOString(),
+            value.sensation_date,
+            key,
+            "local",
+            context,
+          );
+        }
         diagnostic(db, "feedback_received", "saved");
       });
     return nested(work, inTransaction);

@@ -80,6 +80,7 @@ export function telegramWorker(
       ok: boolean;
       result: unknown;
       error_code?: number;
+      description?: string;
       parameters?: { retry_after?: number };
     };
     if (parsed.ok === false && [400, 403, 429].includes(parsed.error_code || 0))
@@ -90,6 +91,17 @@ export function telegramWorker(
               Math.min(86400, Number(parsed.parameters?.retry_after) || 60),
             )
           : null,
+        method.startsWith("editMessage") &&
+        parsed.error_code === 400 &&
+        typeof parsed.description === "string"
+          ? parsed.description.includes("message is not modified")
+            ? "not_modified"
+            : /message (?:to edit not found|can.t be edited)/.test(
+                  parsed.description,
+                )
+              ? "cannot_edit"
+              : "rejected"
+          : "rejected",
       );
     if (!response.ok || parsed.ok !== true)
       throw new Error("Telegram API failed");
@@ -143,6 +155,7 @@ export function telegramWorker(
       Number.isSafeInteger(callback?.message?.message_id) &&
       Number(callback?.message?.message_id) > 0 &&
       String(callback?.from?.id) === config.chatId;
+    let editParent: number | null = null;
     let callbackKey: string | null = null,
       obsolete = false,
       duplicateCallback = false;
@@ -207,6 +220,19 @@ export function telegramWorker(
             !draft ||
             JSON.parse(String(draft.payload)).requestId !== action.id;
         }
+        if (
+          [
+            "accept",
+            "regen",
+            "light",
+            "hard",
+            "ss",
+            "vo2",
+            "endurance",
+            "force",
+          ].includes(action.action)
+        )
+          editParent = action.id;
         if (input) input.text = action.command;
       } else obsolete = true;
       if (callbackAuthorized && typeof callback.id === "string") {
@@ -326,25 +352,47 @@ export function telegramWorker(
         "INSERT INTO app_state VALUES('telegram_last_update_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
       ).run(String(id));
       if (reply) {
-        const first = messages?.[0];
-        db.prepare(
-          "INSERT INTO telegram_outbox(update_id,content,status,format,markup) VALUES(?,?,'pending',?,?)",
-        ).run(
-          id,
-          first?.text ?? reply,
-          first?.parse_mode ?? "plain",
-          first?.reply_markup ? JSON.stringify(first.reply_markup) : null,
-        );
-        for (const [index, part] of (messages?.slice(1) ?? []).entries())
-          db.prepare(
-            "INSERT INTO telegram_message_parts(update_id,part,content,status,format,markup) VALUES(?,?,?,'pending',?,?)",
-          ).run(
-            id,
-            index + 1,
+        const envelopes: Envelope[] = messages?.length
+          ? [...messages]
+          : [{ text: reply, parse_mode: "HTML" }];
+        const targets =
+          editParent === null
+            ? []
+            : [
+                ...db
+                  .prepare(
+                    "SELECT message_id,0 AS part FROM telegram_outbox WHERE update_id=? AND status='sent'",
+                  )
+                  .all(editParent),
+                ...db
+                  .prepare(
+                    "SELECT message_id,part FROM telegram_message_parts WHERE update_id=? AND status='sent' ORDER BY part",
+                  )
+                  .all(editParent),
+              ];
+        // Retire surplus old fragments so no obsolete workout/keyboard remains visible.
+        while (envelopes.length < targets.length)
+          envelopes.push({
+            text: "<i>Proposta sostituita.</i>",
+            parse_mode: "HTML",
+          });
+        for (const [index, part] of envelopes.entries()) {
+          const values = [
             part.text,
             part.parse_mode,
             part.reply_markup ? JSON.stringify(part.reply_markup) : null,
-          );
+            targets[index]?.message_id ?? null,
+            editParent,
+          ];
+          if (index === 0)
+            db.prepare(
+              "INSERT INTO telegram_outbox(update_id,content,status,format,markup,edit_message_id,edit_parent_id) VALUES(?,?,'pending',?,?,?,?)",
+            ).run(id, ...values);
+          else
+            db.prepare(
+              "INSERT INTO telegram_message_parts(update_id,part,content,status,format,markup,edit_message_id,edit_parent_id) VALUES(?,?,?,'pending',?,?,?,?)",
+            ).run(id, index, ...values);
+        }
       }
       if (callbackKey && !obsolete && !duplicateCallback && authorized)
         db.prepare("INSERT INTO telegram_callback_receipts VALUES(?,?,?)").run(
@@ -380,12 +428,12 @@ export function telegramWorker(
     const pending = [
       ...db
         .prepare(
-          "SELECT update_id,0 AS part,content,format,markup FROM telegram_outbox WHERE status='pending'",
+          "SELECT update_id,0 AS part,content,format,markup,edit_message_id,edit_parent_id FROM telegram_outbox WHERE status='pending'",
         )
         .all(),
       ...db
         .prepare(
-          "SELECT update_id,part,content,format,markup FROM telegram_message_parts WHERE status='pending'",
+          "SELECT update_id,part,content,format,markup,edit_message_id,edit_parent_id FROM telegram_message_parts WHERE status='pending'",
         )
         .all(),
     ].sort(
@@ -407,22 +455,83 @@ export function telegramWorker(
         ).run(...keys);
       });
       try {
-        const result = (await api("sendMessage", {
+        const body = {
           chat_id: config.chatId,
           text: row.content,
           ...(row.format === "HTML" ? { parse_mode: "HTML" } : {}),
-          ...(row.markup
-            ? { reply_markup: JSON.parse(String(row.markup)) }
-            : {}),
-        })) as { message_id?: number };
-        if (!Number.isSafeInteger(result?.message_id))
+          reply_markup: row.markup
+            ? JSON.parse(String(row.markup))
+            : { inline_keyboard: [] },
+        };
+        let messageId: number;
+        if (row.edit_message_id) {
+          const old = db
+            .prepare(
+              "SELECT content,markup,format,update_id FROM telegram_outbox WHERE message_id=? AND update_id<? AND status='sent' UNION ALL SELECT content,markup,format,update_id FROM telegram_message_parts WHERE message_id=? AND update_id<? AND status='sent' ORDER BY update_id DESC LIMIT 1",
+            )
+            .get(
+              row.edit_message_id,
+              row.update_id,
+              row.edit_message_id,
+              row.update_id,
+            );
+          try {
+            if (
+              old?.content === row.content &&
+              old?.markup === row.markup &&
+              old?.format === row.format
+            ) {
+              diagnostic(db, "telegram_edited", "unchanged");
+            } else if (
+              old?.content === row.content &&
+              old?.format === row.format
+            ) {
+              await api("editMessageReplyMarkup", {
+                chat_id: config.chatId,
+                message_id: row.edit_message_id,
+                reply_markup: body.reply_markup,
+              });
+            } else
+              await api("editMessageText", {
+                ...body,
+                message_id: row.edit_message_id,
+              });
+            messageId = Number(row.edit_message_id);
+          } catch (error) {
+            if (
+              error instanceof TelegramDeliveryRejected &&
+              error.reason === "not_modified"
+            )
+              messageId = Number(row.edit_message_id);
+            else if (
+              error instanceof TelegramDeliveryRejected &&
+              error.reason === "cannot_edit"
+            ) {
+              const sent = (await api("sendMessage", body)) as {
+                message_id?: number;
+              };
+              messageId = Number(sent?.message_id);
+              diagnostic(db, "telegram_sent", "edit_rejected_fallback");
+            } else throw error;
+          }
+        } else {
+          const result = (await api("sendMessage", body)) as {
+            message_id?: number;
+          };
+          messageId = Number(result?.message_id);
+        }
+        if (!Number.isSafeInteger(messageId) || messageId <= 0)
           throw new Error("Telegram response invalid");
         transaction(db, () => {
           if (!owns()) throw new Error("Telegram lease lost");
           db.prepare(
             `UPDATE ${table} SET status='sent',message_id=? WHERE ${where}`,
-          ).run(result.message_id!, ...keys);
-          diagnostic(db, "telegram_sent", "confirmed");
+          ).run(messageId, ...keys);
+          diagnostic(
+            db,
+            row.edit_message_id ? "telegram_edited" : "telegram_sent",
+            "confirmed",
+          );
         });
       } catch {
         if (owns())
@@ -433,7 +542,13 @@ export function telegramWorker(
             db.prepare(
               "UPDATE telegram_message_parts SET status='unknown' WHERE update_id=? AND part>? AND status='pending'",
             ).run(row.update_id, row.part);
-            diagnostic(db, "error", "telegram_send_unknown");
+            diagnostic(
+              db,
+              "error",
+              row.edit_message_id
+                ? "telegram_edit_unknown"
+                : "telegram_send_unknown",
+            );
           });
         return;
       }

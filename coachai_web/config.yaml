@@ -1,5 +1,5 @@
 name: Coach AI Web
-version: "0.6.0"
+version: "0.6.1"
 slug: coachai_web
 description: Dashboard e servizi Coach AI, Telegram disabilitato per default
 arch:

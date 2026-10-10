@@ -26,6 +26,7 @@ export type Wellness = {
   sleepScore: number | null;
 };
 export type Feedback = {
+  context?: "activity" | "current" | "ambiguous";
   activityDate: string;
   updatedAt: string | null; // Last update instant, never claimed to be first insertion.
   updatedDate: string | null; // Europe/Rome date of that instant.

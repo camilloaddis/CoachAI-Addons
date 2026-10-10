@@ -53,6 +53,7 @@ const migrations = [
   "001_initial.sql",
   "002_coach_services.sql",
   "003_telegram_envelopes.sql",
+  "004_feedback_context_edits.sql",
 ];
 export function openStore(
   path: string,
@@ -109,6 +110,7 @@ export function diagnostic(
     | "feedback_scheduled"
     | "activity_detected"
     | "telegram_sent"
+    | "telegram_edited"
     | "feedback_received"
     | "meal_recorded"
     | "error"

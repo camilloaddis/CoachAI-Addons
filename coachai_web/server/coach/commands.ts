@@ -184,11 +184,30 @@ export function coachCommands(
           }
         }
       } else if (
-        /^(allenamento|intenso|leggero|vo2|ss|soglia|endurance|recupero|tempo|forza|pianifica)$/.test(
+        /^(allenamento|rigenera|intenso|leggero|vo2|ss|soglia|endurance|recupero|tempo|forza|pianifica)$/.test(
           lower,
         )
       ) {
-        const p = selectWorkout(db, await readiness(), clock(), lower);
+        let requested = lower;
+        if (lower === "rigenera") {
+          const last = db
+            .prepare(
+              "SELECT payload FROM workout_proposals ORDER BY created_at DESC,rowid DESC LIMIT 1",
+            )
+            .get();
+          requested = last
+            ? (JSON.parse(String(last.payload)).requestCommand ??
+              JSON.parse(String(last.payload)).requested ??
+              "allenamento")
+            : "allenamento";
+        }
+        const p = selectWorkout(
+          db,
+          await readiness(),
+          clock(),
+          requested,
+          lower === "rigenera",
+        );
         if (config.groqEnabled) {
           try {
             const explanation = await ai.explanation({
@@ -197,7 +216,7 @@ export function coachCommands(
               week: p.week,
               readiness: p.readiness,
               confidence: p.confidence,
-              reasons: p.reasons,
+              reasons: p.limitingFactors.map((c) => c.text),
             });
             prepared = {
               kind: lower === "pianifica" ? "plan" : "workout",
@@ -365,12 +384,18 @@ export function coachCommands(
       reply = "Pasto registrato.";
     } else if (lower.startsWith("gambe ")) {
       const parts = text.split(/\s+/);
-      if (parts.length < 3 || parts.length > 4) throw new ValidationError();
+      if (
+        parts.length < 3 ||
+        parts.length > 5 ||
+        (parts[4] !== undefined && parts[4] !== "current")
+      )
+        throw new ValidationError();
       records.feedback(
         {
           activity_id: parts[1],
           legs: Number(parts[2]),
           sensation_date: parts[3],
+          context: parts[4] === "current" ? "current" : "activity",
         },
         `telegram:${id}`,
         true,
@@ -390,7 +415,11 @@ export function coachCommands(
         .get(Number(m[1]));
       if (!row) throw new ValidationError();
       records.feedback(
-        { activity_id: String(row.activity_id), legs: Number(m[2]) },
+        {
+          activity_id: String(row.activity_id),
+          legs: Number(m[2]),
+          context: "activity",
+        },
         `telegram:${id}`,
         true,
       );
@@ -479,7 +508,7 @@ export function coachCommands(
       )
     )
       reply =
-        "Coach AI\nAllenamento: allenamento, pianifica, leggero, intenso, vo2, ss, forza, accetta.\nDiario: descrivi il pasto → accetta pasto / annulla; pasti DATA, elimina pasto ID, correggi pasto ID DESCRIZIONE.\nRiepiloghi: oggi, ieri, resoconto DATA, settimana, peso, chiudi giornata, riapri giornata.\nConfigurazione: impostazioni.\nFeedback: gambe ID 1-5 [DATA], feedback mancanti.";
+        "Coach AI\nAllenamento: allenamento, pianifica, leggero, intenso, vo2, ss, forza, accetta.\nDiario: descrivi il pasto → accetta pasto / annulla; pasti DATA, elimina pasto ID, correggi pasto ID DESCRIZIONE.\nRiepiloghi: oggi, ieri, resoconto DATA, settimana, peso, chiudi giornata, riapri giornata.\nConfigurazione: impostazioni.\nFeedback seduta: gambe ID 1-5 [DATA]. Recupero attuale: gambe ID 1-5 DATA current. Feedback mancanti.";
     db.prepare(
       "INSERT INTO app_state VALUES('data_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1",
     ).run();

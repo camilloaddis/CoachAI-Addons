@@ -461,7 +461,7 @@ function App() {
           </div>
         </section>
         <footer>
-          Coach AI Web 0.6.0 ·{" "}
+          Coach AI Web 0.6.1 ·{" "}
           {data?.dataSource === "local"
             ? "Database applicativo locale"
             : "Snapshot SQLite in sola lettura"}{" "}

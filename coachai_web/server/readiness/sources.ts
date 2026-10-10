@@ -100,13 +100,25 @@ export function readSnapshot(
       );
       for (const r of records) {
         const d = String(r.activity_date);
-        if (validDate(d))
+        if (validDate(d)) {
+          let raw: Record<string, unknown> = {};
+          try {
+            const parsed = JSON.parse(
+              payloads.get(String(r.activity_id)) ?? "{}",
+            );
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+              throw Error();
+            raw = parsed;
+          } catch {
+            issues.push(
+              "Payload attività non valido: fallback colonne verificate.",
+            );
+          }
+          const measured = telemetry(raw);
           activities.push({
-            ...(payloads.has(String(r.activity_id))
-              ? telemetry(JSON.parse(payloads.get(String(r.activity_id))!))
-              : {}),
-            averagePower: number(r.avg_power),
-            averageHR: number(r.avg_hr, 1, 250),
+            ...measured,
+            averagePower: number(r.avg_power) ?? measured.averagePower,
+            averageHR: number(r.avg_hr, 1, 250) ?? measured.averageHR,
             id: String(r.activity_id),
             date: d,
             load: number(r.training_load),
@@ -117,6 +129,7 @@ export function readSnapshot(
             commute: r.category === "COMMUTING" ? true : null,
             rpe: number(r.rpe, 0, 10),
           });
+        }
       }
       for (const c of ["training_load", "intensity", "duration_min"])
         if (!a.has(c))
@@ -133,13 +146,21 @@ export function readSnapshot(
     ) {
       const records = db
         .prepare(
-          `SELECT ta.activity_date, tf.legs, ${f.has("updated_at") ? "tf.updated_at" : "NULL"} AS updated_at, ${f.has("sensation_date") ? "tf.sensation_date" : "NULL"} AS sensation_date FROM training_feedback tf JOIN training_activities ta ON ta.activity_id=tf.activity_id WHERE ta.activity_date <= ? AND (ta.activity_date >= ? ${f.has("sensation_date") ? "OR tf.sensation_date >= ?" : ""})`,
+          `SELECT ta.activity_date, tf.legs, ${f.has("context") ? "tf.context" : "'ambiguous'"} AS context, ${f.has("updated_at") ? "tf.updated_at" : "NULL"} AS updated_at, ${f.has("sensation_date") ? "tf.sensation_date" : "NULL"} AS sensation_date FROM training_feedback tf JOIN training_activities ta ON ta.activity_id=tf.activity_id WHERE ta.activity_date <= ? AND (ta.activity_date >= ? ${f.has("sensation_date") ? "OR tf.sensation_date >= ?" : ""})`,
         )
         .all(
           date,
           shift(date, -2),
           ...(f.has("sensation_date") ? [shift(date, -2)] : []),
         ) as Row[];
+      if (columns("recovery_feedback").has("observation_date")) {
+        const current = db
+          .prepare(
+            "SELECT a.activity_date,f.legs,f.updated_at,f.observation_date AS sensation_date,'current' AS context FROM recovery_feedback f JOIN training_activities a USING(activity_id) WHERE f.observation_date BETWEEN ? AND ?",
+          )
+          .all(shift(date, -2), date) as Row[];
+        records.push(...current);
+      }
       for (const r of records) {
         const legs = number(r.legs, 1, 5),
           activityDate = String(r.activity_date);
@@ -162,6 +183,10 @@ export function readSnapshot(
           continue;
         }
         feedback.push({
+          context:
+            r.context === "activity" || r.context === "current"
+              ? r.context
+              : "ambiguous",
           activityDate,
           ...timestamp,
           sensationDate:
@@ -175,9 +200,15 @@ export function readSnapshot(
           legs,
         });
       }
-      if (feedback.some((f) => f.sensationDate === null))
+      if (
+        feedback.some(
+          (f) =>
+            f.context === "ambiguous" ||
+            (f.context === "current" && f.sensationDate === null),
+        )
+      )
         issues.push(
-          "Telegram salva l’ultima modifica, non la data della sensazione: feedback retrospettivo, non misurazione giornaliera.",
+          "Feedback legacy/ambiguo: data di inserimento distinta da data della sensazione e recupero attuale.",
         );
       if (!f.has("updated_at"))
         issues.push("Feedback SQLite: timestamp updated_at assente.");
