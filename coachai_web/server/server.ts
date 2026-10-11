@@ -1,3 +1,4 @@
+import { trendService } from "./coach/trends.js";
 import { backupBefore006 } from "./storage/upgrade-backup.js";
 import { workoutLibrarySync } from "./coach/workout-library-sync.js";
 import { LibraryError } from "./coach/workout-library-client.js";
@@ -19,6 +20,7 @@ import {
   type Wellness,
 } from "./readiness/types.js";
 import Fastify from "fastify";
+import packageMetadata from "../package.json" with { type: "json" };
 import fastifyStatic from "@fastify/static";
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, statSync, readFileSync } from "node:fs";
@@ -232,6 +234,7 @@ export async function createApp(
         readiness,
         options.groqFetcher ?? options.fetcher,
         options.clock,
+        intervalSettings.athlete,
       )
     : null;
   app.addHook("onRequest", async (request, reply) => {
@@ -251,6 +254,19 @@ export async function createApp(
     if (!library) return reply.code(503).send({ error: "database_unavailable" });
     try { return await library.syncOnce(); }
     catch (error) { return reply.code(error instanceof LibraryError && error.code === "busy" ? 409 : 503).send({ error: error instanceof LibraryError ? error.code : "library_sync_failed" }); }
+  });
+  const trends = store ? trendService(store, runtime, options.groqFetcher ?? options.fetcher, options.clock) : null;
+  for (const method of ["GET", "POST"] as const) app.route<{ Querystring: { days?: string } }>({
+    method, url: method === "GET" ? "/api/trends" : "/api/trends/summary",
+    handler: async (request, reply) => {
+      if (!trends) return reply.code(503).send({ error: "database_unavailable" });
+      if (request.query.days !== "7" && request.query.days !== "30") return reply.code(400).send({ error: "invalid_period" });
+      const days = Number(request.query.days) as 7 | 30;
+      if (method === "GET") return trends.report(days);
+      if (runtime.dataSource !== "local") return reply.code(409).send({ error: "local_database_required" });
+      try { return await trends.summarize(days); }
+      catch { return reply.code(503).send({ error: "summary_unavailable" }); }
+    },
   });
   app.get("/api/access", async (request) => ({
     method: accessMethod(request, runtime.adminToken),
@@ -323,7 +339,7 @@ export async function createApp(
     ).updatedAt;
     const age = lastSyncAt ? now.getTime() - Date.parse(lastSyncAt) : NaN;
     const evaluated = await readiness();
-    const prescription = store ? selectWorkout(store, evaluated, now) : null;
+    const prescription = store ? selectWorkout(store, evaluated, now, undefined, false, undefined, intervalSettings.athlete) : null;
     // Stale cache may be inspected, but these observations never re-enter scoring.
     const cachedWellness =
       store
@@ -475,6 +491,7 @@ export async function createApp(
   });
   app.addHook("onReady", async () => {
     sync?.start();
+    library?.start();
   });
   app.addHook("onClose", async () => {
     await library?.stop();
@@ -496,7 +513,7 @@ export async function createApp(
     intervalsWriteEnabled: false,
     database: existsSync(dbPath),
     ...snapshot(),
-    version: "0.9.1",
+    version: packageMetadata.version,
   }));
   app.get("/api/overview", async () => {
     const availability = {
@@ -553,7 +570,7 @@ export async function createApp(
     const evaluated = await readiness();
     const prescription =
       runtime.dataSource === "local" && store
-        ? selectWorkout(store, evaluated, options.clock?.() ?? new Date())
+        ? selectWorkout(store, evaluated, options.clock?.() ?? new Date(), undefined, false, undefined, intervalSettings.athlete)
         : {
             recommendation: evaluated.recommendation,
             constraints: evaluated.constraints,

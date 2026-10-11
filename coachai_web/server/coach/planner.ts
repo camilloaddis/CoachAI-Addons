@@ -73,9 +73,10 @@ export function planAutomatic(input: PlannerInput): AutomaticTrainingDecision & 
   const week = config?.start && config.start <= date && validDate(config.start)
     ? Math.min(config.weeks, Math.floor((Date.parse(date) - Date.parse(config.start)) / 604800000) + 1) : null;
   const progress = week !== null && config && config.weeks > 1 ? (week - 1) / (config.weeks - 1) : null;
-  const phase = progress === null ? "non determinabile: configurare start_date" : progress < .25 ? "base" : progress < .5 ? "costruzione" : progress < .75 ? "specifica" : week === config?.weeks ? "scarico" : "picco";
+  const phase = progress === null ? (config?.start ? "non iniziato" : "adattivo") : progress < .25 ? "base" : progress < .5 ? "costruzione" : progress < .75 ? "specifica" : week === config?.weeks ? "scarico" : "picco";
   if (config) {
-    if (week === null) limit("plan_start_unknown", "plan", "missing", 2, "Inizio piano non configurato: massimo endurance.");
+    if (week === null && config.start) limit("plan_start_unknown", "plan", "policy", 2, "Il piano configurato non è ancora iniziato: massimo endurance.");
+    else if (week === null) reason("rolling_plan", "plan", "policy", "Piano adattivo senza data di inizio: recupero, calendario e storico guidano la proposta.");
     if (phase === "scarico") limit("taper", "plan", "policy", 2, "Fase scarico: massimo endurance.");
     if (phase === "base" || phase === "costruzione") limit("early_phase", "plan", "policy", 4, "Base/costruzione: massimo Sweet Spot/soglia.");
   }

@@ -1,17 +1,31 @@
-# Coach AI Web 0.9.1
+# Coach AI Web 1.0.0
 
-Libreria workout Intervals: normalizzatore, cache SQLite (migrazione 006), sincronizzazione manuale GET autenticata. Il catalogo importato non viene ancora usato per generare proposte. Readiness, Confidence, Planner e Rigenera restano invariati.
+Versione candidata per Home Assistant: allenamento, libreria workout Intervals.icu, diario alimentare e trend 7/30 giorni.
 
-La nuova opzione `intervals_library_sync_enabled` è **false** per default. Nessuna nuova scrittura su Intervals. Accesso Home Assistant Ingress oppure autenticazione amministrativa per accesso diretto.
+## Novità rispetto alla 0.9.1
 
-## Aggiornamento dalla 0.9.0
+- Selezione prioritaria degli allenamenti dalla libreria Intervals.icu sincronizzata in cache, con fallback statico dichiarato.
+- Rigenera propone alternative compatibili anche tra sessioni/browser.
+- Stato della libreria e sincronizzazione manuale nelle Impostazioni. Aggiornamento automatico ogni 6 ore solo quando `intervals_library_sync_enabled` è abilitata; default `false`.
+- Consigli di allenamento AI quando disponibili, con comportamento di fallback.
+- Trend 7/30 giorni con grafici, copertura dei dati, sintesi AI memorizzata e fallback locale.
+- Il bilancio energetico non viene stimato senza TDEE affidabile.
 
-Prima di aggiornare, creare un backup Home Assistant che includa Coach AI Web e scaricarlo su un altro dispositivo. Annotare la versione 0.9.0 e conservare le opzioni tramite il backup, senza pubblicare token.
+La connessione Intervals.icu resta in sola lettura. Non sono previste modifiche allo schema SQLite per i trend.
 
-Al primo avvio 0.9.1, prima di applicare 006, l'app verifica l'integrità del database originale, crea uno snapshot tramite SQLite Online Backup API in `/data/backups/pre-006-*/coachai.db` e ne verifica l'integrità. Il backup è privato e persistente, separato dall'immagine aggiornata. In caso di errore l'avvio si interrompe prima della migrazione e dei worker. Non disinstallare l'add-on: la disinstallazione può cancellare /data.
+## Prima di aggiornare dalla 0.9.1
+
+1. Verificare che la release 1.0.0 abbia superato test completi, typecheck, build, controlli di distribuzione e smoke test di aggiornamento.
+2. Creare e scaricare un backup Home Assistant che includa Coach AI Web, dati e configurazione. Non pubblicare token o backup.
+3. Conservare una copia del database e annotare la versione installata e le opzioni attive.
+4. Pubblicare il pacchetto nel repository di distribuzione `CoachAI-Addons` solo dopo approvazione esplicita.
+
+Non disinstallare l'add-on per aggiornare: la disinstallazione può eliminare dati persistenti.
 
 ## Ripristino
 
-Per tornare alla 0.9.0, arrestare Coach AI e ripristinare il backup Home Assistant precedente comprensivo dell'add-on e dei suoi dati/configurazione. Non avviare la vecchia versione sul database già migrato a 006. Le modifiche successive al backup non saranno nel ripristino. Conservare una copia anche dello stato più recente prima di un rollback.
+In caso di problemi, arrestare l'add-on e ripristinare il backup Home Assistant precedente completo di dati e configurazione. Non avviare una versione precedente su un database con migrazioni incompatibili. Un ripristino comporta la perdita delle modifiche successive al backup.
 
-I backup SQLite locali sono una seconda protezione: devono essere recuperati con strumenti amministrativi ad add-on arrestato e verificati prima del ripristino. Non copiare il file SQLite mentre è aperto e non lasciare file WAL/SHM appartenenti al database sostituito. Non cancellare manualmente righe dal registro delle migrazioni.
+## Stato della release
+
+Questa PR prepara la versione nel repository sorgente. **Non pubblica la release, non aggiorna `CoachAI-Addons` e non effettua deploy.** Le verifiche finali e la pubblicazione richiedono un passaggio separato.

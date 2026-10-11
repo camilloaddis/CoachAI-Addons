@@ -16,4 +16,4 @@ export function apiFetch(path: string, options: RequestInit = {}) {
     headers: { ...options.headers, "X-CoachAI-Request": "1" },
   });
 }
-export type Tab = "summary" | "training" | "nutrition" | "debug";
+export type Tab = "today" | "trends" | "settings";

@@ -1,3 +1,4 @@
+import { TrendsPanel } from "./TrendsPanel.js";
 import { TrainingProposal } from "./TrainingProposal.js";
 import { apiFetch, type Tab } from "./api.js";
 import React, { useEffect, useRef, useState } from "react";
@@ -153,6 +154,7 @@ export function CoachWorkspace({
         request,
         regenerate,
         ...(intent ? { intent } : {}),
+        ...(regenerate && proposal ? { previousProposalId: proposal.id } : {}),
       });
       setProposal(p);
     });
@@ -169,10 +171,10 @@ export function CoachWorkspace({
         <fieldset disabled={busy} className="coach-fields">
           <section
             id="workspace-training"
-            hidden={tab !== "training"}
+            hidden={tab !== "today"}
             aria-label="Gestione allenamento"
           >
-            <h2>Allenamento</h2>
+            <h2>Il tuo allenamento</h2><p className="muted">Proposte dalla libreria Intervals locale, con catalogo Coach di fallback.</p>
             <section
               className="training-mode"
               aria-label="Modalità Coach automatica"
@@ -209,6 +211,7 @@ export function CoachWorkspace({
                 ))}
               </div>
             </section>
+            <details><summary>Scegli una categoria specifica</summary>
             <section
               className="training-mode"
               aria-label="Richiesta manuale esplicita"
@@ -250,6 +253,7 @@ export function CoachWorkspace({
                 ))}
               </div>
             </section>
+            </details>
             {proposal && (
               <TrainingProposal
                 proposal={proposal.proposal}
@@ -281,6 +285,39 @@ export function CoachWorkspace({
                 }
               />
             )}
+            <details>
+              <summary>Storico allenamenti e feedback</summary>
+              {state.proposals.map((p) => (
+                <article key={p.id}>
+                  <strong>{p.proposal.workout.name}</strong>
+                  <p>
+                    {p.proposal.date} · {p.proposal.duration} min ·{" "}
+                    {state.selected === p.id ? "Selezionato" : "Proposta"}
+                  </p>
+                  <pre className="workout-structure">
+                    {p.proposal.workout.structure}
+                  </pre>
+                  <button type="button" onClick={() => setProposal(p)}>
+                    Apri proposta
+                  </button>
+                </article>
+              ))}
+              {state.activities.map((a) => (
+                <p key={a.activity_id}>
+                  {a.activity_date} · {a.name || "Attività"} ·{" "}
+                  {state.feedback.find((f) => f.activity_id === a.activity_id)
+                    ? `Gambe ${state.feedback.find((f) => f.activity_id === a.activity_id)!.legs}/5 durante la seduta`
+                    : "Feedback non registrato"}
+                </p>
+              ))}
+            </details>
+          </section>
+          <section
+            id="workspace-summary"
+            hidden={tab !== "settings"}
+            aria-label="Recupero attuale"
+          >
+            <details><summary>Osservazioni facoltative sul recupero e sulle sedute</summary>
             <h3>Feedback della seduta</h3>
             <p className="muted">
               Come erano le gambe durante l’attività: non è una misura del
@@ -335,38 +372,6 @@ export function CoachWorkspace({
               </label>
               <button>Salva feedback</button>
             </form>
-            <details>
-              <summary>Storico allenamenti e feedback</summary>
-              {state.proposals.map((p) => (
-                <article key={p.id}>
-                  <strong>{p.proposal.workout.name}</strong>
-                  <p>
-                    {p.proposal.date} · {p.proposal.duration} min ·{" "}
-                    {state.selected === p.id ? "Selezionato" : "Proposta"}
-                  </p>
-                  <pre className="workout-structure">
-                    {p.proposal.workout.structure}
-                  </pre>
-                  <button type="button" onClick={() => setProposal(p)}>
-                    Apri proposta
-                  </button>
-                </article>
-              ))}
-              {state.activities.map((a) => (
-                <p key={a.activity_id}>
-                  {a.activity_date} · {a.name || "Attività"} ·{" "}
-                  {state.feedback.find((f) => f.activity_id === a.activity_id)
-                    ? `Gambe ${state.feedback.find((f) => f.activity_id === a.activity_id)!.legs}/5 durante la seduta`
-                    : "Feedback non registrato"}
-                </p>
-              ))}
-            </details>
-          </section>
-          <section
-            id="workspace-summary"
-            hidden={tab !== "summary"}
-            aria-label="Recupero attuale"
-          >
             <h3>Recupero attuale · {localDay()}</h3>
             <form
               className="web-form"
@@ -410,10 +415,11 @@ export function CoachWorkspace({
                 {state.recovery[0].legs}/5.
               </p>
             )}
+            </details>
           </section>
           <section
             id="workspace-nutrition"
-            hidden={tab !== "nutrition"}
+            hidden={tab !== "today"}
             aria-label="Gestione alimentazione"
           >
             <h2>Alimentazione</h2>
@@ -671,6 +677,7 @@ export function CoachWorkspace({
                 </li>
               ))}
             </ul>
+            <details><summary>Opzioni diario</summary>
             <button
               type="button"
               onClick={() =>
@@ -681,17 +688,12 @@ export function CoachWorkspace({
               }
             >
               Chiudi diario di oggi
-            </button>
-            <details>
-              <summary>Riepiloghi</summary>
-              <p style={{ whiteSpace: "pre-wrap" }}>{state.reports.daily}</p>
-              <p style={{ whiteSpace: "pre-wrap" }}>{state.reports.weekly}</p>
-              <p style={{ whiteSpace: "pre-wrap" }}>{state.reports.weight}</p>
-            </details>
+            </button></details>
           </section>
+          <TrendsPanel active={tab === "trends"} revision={state} />
           <section
             id="workspace-debug"
-            hidden={tab !== "debug"}
+            hidden={tab !== "settings"}
             aria-label="Configurazione Coach"
           >
             <details open>
@@ -734,6 +736,28 @@ export function CoachWorkspace({
                   />
                 </label>
                 <label>
+                  Obiettivo
+                  <input
+                    name="goal"
+                    list="training-goal-presets"
+                    maxLength={500}
+                    defaultValue={state.config.goal}
+                  />
+                </label>
+                <label>
+                  Peso obiettivo kg
+                  <input
+                    name="target_weight"
+                    type="number"
+                    min={30}
+                    max={250}
+                    step="any"
+                    defaultValue={(state.config.targetWeight as number) ?? ""}
+                  />
+                </label>
+                <details>
+                  <summary>Piano avanzato</summary>
+                  <label>
                   Settimane
                   <input
                     name="plan_weeks"
@@ -751,25 +775,14 @@ export function CoachWorkspace({
                     defaultValue={state.config.start ?? ""}
                   />
                 </label>
-                <label>
-                  Obiettivo
-                  <input
-                    name="goal"
-                    maxLength={500}
-                    defaultValue={state.config.goal}
-                  />
-                </label>
-                <label>
-                  Peso obiettivo kg
-                  <input
-                    name="target_weight"
-                    type="number"
-                    min={30}
-                    max={250}
-                    step="any"
-                    defaultValue={(state.config.targetWeight as number) ?? ""}
-                  />
-                </label>
+                </details>
+                <datalist id="training-goal-presets">
+                  <option value="Miglioramento FTP" />
+                  <option value="Prestazioni in salita" />
+                  <option value="Endurance e uscite lunghe" />
+                  <option value="Allenamento equilibrato" />
+                </datalist>
+                <p className="muted">L’obiettivo orienta la scelta tra workout compatibili. La data d’inizio è facoltativa: senza data il piano è adattivo. Groq, se già abilitato e configurato, può scegliere nella rosa verificata; altrimenti il consiglio resta locale.</p>
                 <button>Salva configurazione</button>
               </form>
             </details>

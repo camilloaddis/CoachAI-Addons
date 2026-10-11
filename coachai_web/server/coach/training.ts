@@ -1,3 +1,6 @@
+import { goalFit, goalFocus } from "./workout-goals.js";
+import type { WorkoutAdvice } from "./workout-advisor.js";
+import { libraryCandidates, type CatalogWorkout } from "./library-catalog.js";
 import { categoryLevel, categoryLabels, validateIntent } from "./intent.js";
 import { planAutomatic, recommendations } from "./planner.js";
 import { physiologicalAvailability } from "../readiness/physiology.js";
@@ -120,7 +123,10 @@ export type WorkoutSelection = {
     warnings: Factor[];
     advisoryConstraints: Constraint[];
   };
-  workout: { name: string; structure: string; difficulty: number };
+  workout: CatalogWorkout;
+  advisor?: WorkoutAdvice;
+  catalogSource: "intervals" | "static";
+  catalogNote: string;
   requestCommand: string;
   requestSatisfied: boolean;
   requested: Recommendation;
@@ -144,6 +150,9 @@ export function selectWorkout(
   request = "allenamento",
   regenerate = false,
   intent: TrainingIntent = { mode: "automatic", preference: request === "leggero" ? "lighter" : request === "intenso" ? "harder" : "recommended" },
+  libraryAccount?: string,
+  previousWorkout?: CatalogWorkout,
+  collectCandidates?: (candidates: CatalogWorkout[]) => void,
 ): WorkoutSelection {
   intent = validateIntent(intent);
   const manual = intent.mode === "manual";
@@ -238,18 +247,25 @@ export function selectWorkout(
     structure: `- ${minutes}m 45-55% power=3s`,
     difficulty: 1,
   }));
-  const pool = level === 1 ? recoveryVariants : catalog;
+  const remote = libraryCandidates(db, libraryAccount);
+  const minutes = (w: CatalogWorkout) => w.library ? w.library.normalized.durationSeconds / 60 : templateDuration(w.structure);
+  const peak = (w: CatalogWorkout) => w.library ? w.library.normalized.peakPowerPercentFtp : peakPower(w.structure);
+  const pool: CatalogWorkout[] = [...remote, ...(level === 1 ? recoveryVariants : catalog)];
   const targetDuration =
     request === "leggero" ? Math.min(30, config.duration) : config.duration;
   let candidates = pool.filter((w) =>
     level === 0
       ? w.difficulty === 0
       : w.difficulty > 0 &&
-        templateDuration(w.structure) <= config.duration &&
-        peakPower(w.structure) <= ceiling &&
+        minutes(w) <= config.duration &&
+        peak(w) <= ceiling &&
         (manual || phase !== "base" || w.difficulty <= 2),
   );
-  const preferred = (w: (typeof catalog)[number]) => {
+  const preferred = (w: CatalogWorkout) => {
+    if (w.library) {
+      if (intent.mode === "manual") return w.library.category === intent.category;
+      return ({ 0: ["rest"], 1: ["recovery"], 2: ["endurance"], 3: request === "forza" ? ["strength"] : ["tempo", "strength"], 4: ["sweet_spot", "threshold"], 5: ["vo2max"] } as Record<number, string[]>)[level].includes(w.library.category);
+    }
     if (intent.mode === "manual") {
       const patterns = {
         rest: /^Riposo/, recovery: /^Recovery/, endurance: /^Endurance/,
@@ -272,39 +288,6 @@ export function selectWorkout(
   };
   const matching = candidates.filter(preferred);
   if (matching.length || manual) candidates = matching;
-  const histories = db
-    .prepare(
-      "SELECT payload,created_at FROM workout_proposals WHERE created_at>=? ORDER BY created_at DESC",
-    )
-    .all(new Date(now.getTime() - 14 * 86400000).toISOString());
-  const used = new Map(
-    histories.map((h) => [
-      JSON.parse(String(h.payload)).workout.name as string,
-      String(h.created_at),
-    ]),
-  );
-  const activities = db
-    .prepare(
-      "SELECT name,activity_date FROM training_activities WHERE activity_date>=? ORDER BY activity_date DESC",
-    )
-    .all(shift(date, -14));
-  for (const a of activities)
-    if (typeof a.name === "string" && !used.has(a.name))
-      used.set(a.name, String(a.activity_date));
-  candidates.sort(
-    (a, b) =>
-      (request === "leggero" && !regenerate
-        ? Math.abs(templateDuration(a.structure) - targetDuration) -
-          Math.abs(templateDuration(b.structure) - targetDuration)
-        : 0) ||
-      Number(used.has(a.name)) - Number(used.has(b.name)) ||
-      String(used.get(a.name) || "").localeCompare(
-        String(used.get(b.name) || ""),
-      ) ||
-      Math.abs(templateDuration(a.structure) - targetDuration) -
-        Math.abs(templateDuration(b.structure) - targetDuration) ||
-      a.name.localeCompare(b.name),
-  );
   if (!manual && level > 2 && !matching.length) {
     limit(
       "catalog_unavailable",
@@ -313,13 +296,60 @@ export function selectWorkout(
       2,
       "Nessuna struttura della categoria richiesta compatibile con durata e picco: endurance controllata.",
     );
-    candidates = catalog.filter(
-      (w) =>
-        /^Endurance/.test(w.name) &&
-        templateDuration(w.structure) <= config.duration &&
-        peakPower(w.structure) <= 75,
+    candidates = [...remote.filter(w => w.library?.category === "endurance"), ...catalog].filter(
+      (w: CatalogWorkout) =>
+        (w.library?.category === "endurance" || (!w.library && /^Endurance/.test(w.name))) &&
+        minutes(w) <= config.duration &&
+        peak(w) <= 75,
     );
   }
+  const usableLibrary = candidates.filter(w => w.library);
+  if (usableLibrary.length) candidates = usableLibrary;
+  // Identical target structures form one rotation choice even under different names.
+  candidates = [...new Map(candidates.map(w => [w.library?.fingerprint ?? w.name, w])).values()];
+  const identity = (w: CatalogWorkout) => w.library ? `${w.library.account}:${w.library.fingerprint}` : w.name;
+  const histories = db
+    .prepare(
+      "SELECT payload,created_at FROM workout_proposals WHERE created_at>=? ORDER BY created_at DESC,rowid DESC",
+    )
+    .all(new Date(now.getTime() - 14 * 86400000).toISOString());
+  const used = new Map<string, number>();
+  for (const [index, h] of histories.entries()) {
+    const w = JSON.parse(String(h.payload)).workout as CatalogWorkout;
+    if (w && !used.has(identity(w))) used.set(identity(w), histories.length - index);
+  }
+  const activities = db
+    .prepare(
+      "SELECT name,activity_date FROM training_activities WHERE activity_date>=? ORDER BY activity_date DESC",
+    )
+    .all(shift(date, -14));
+  for (const a of activities)
+    if (typeof a.name === "string" && !used.has(a.name))
+      used.set(a.name, 0);
+  candidates.sort(
+    (a, b) =>
+      (request === "leggero" && !regenerate
+        ? Math.abs(minutes(a) - targetDuration) -
+          Math.abs(minutes(b) - targetDuration)
+        : 0) ||
+      Number(used.has(identity(a))) - Number(used.has(identity(b))) ||
+      (used.get(identity(a)) ?? 0) - (used.get(identity(b)) ?? 0) ||
+      goalFit(b, goalFocus(config.goal)) - goalFit(a, goalFocus(config.goal)) ||
+      Math.abs(minutes(a) - targetDuration) -
+        Math.abs(minutes(b) - targetDuration) ||
+      a.name.localeCompare(b.name),
+  );
+  const alternativeCount = candidates.length;
+  if (regenerate && candidates.length > 1 && (previousWorkout || histories.length)) {
+    const previous = previousWorkout ?? JSON.parse(String(histories[0].payload)).workout as CatalogWorkout;
+    if (previous) candidates = candidates.filter(w => identity(w) !== identity(previous));
+  }
+  const policyCandidates = request === "leggero" && !regenerate && candidates.length
+    ? candidates.filter(w => Math.abs(minutes(w) - targetDuration) === Math.abs(minutes(candidates[0]) - targetDuration)) : candidates;
+  const unused = policyCandidates.filter(w => !used.has(identity(w)));
+  // AI cannot skip unseen structures to repeat an already proposed workout.
+  const eligible = unused.length ? unused : policyCandidates.slice(0, 1);
+  collectCandidates?.(eligible.slice(0, 8));
   for (const c of constraints)
     c.blocksRequested = request !== "leggero" && c.ceiling === level && c.ceiling < requested;
   const manualFallback = intent.mode === "manual" ? {
@@ -329,7 +359,7 @@ export function selectWorkout(
       ? "- Warm up 3m 50-65% power=3s\n\n3x\n- 1m 115% power=3s\n- 2m 50-55% power=3s\n\n- Cooldown 3m 50-45% power=3s"
       : `- Warm up 3m 45-55% power=3s\n- ${config.duration - 6}m ${{ recovery: "45-55", endurance: "60-70", tempo: "76-85", sweet_spot: "88-94", threshold: "95-100", strength: "75-85" }[intent.category]}% ${intent.category === "strength" ? "50-60rpm " : ""}power=3s\n- Cooldown 3m 50-45% power=3s`,
   } : null;
-  const workout = candidates[0] || manualFallback || {
+  const workout: CatalogWorkout = candidates[0] || manualFallback || {
     name:
       level <= 1 ? "Recupero breve controllato" : "Endurance breve controllata",
     structure: `- ${config.duration}m ${level <= 1 ? "45-55" : "55-65"}% power=3s`,
@@ -338,7 +368,7 @@ export function selectWorkout(
   // Compare against the complete automatic selection, including catalog and
   // duration fallbacks. Reuse the same code; the automatic call never recurses.
   const automatic: { recommendation: Recommendation; constraints: Constraint[] } | null = manual ? selectWorkout(db, result, now, "allenamento", false,
-    { mode: "automatic", preference: "recommended" }) : null;
+    { mode: "automatic", preference: "recommended" }, libraryAccount) : null;
   const automaticRecommendation = automatic?.recommendation ?? rank[level];
   const advisoryConstraints = automatic?.constraints ?? plan.constraints;
   const recommendedLevel = rank.indexOf(automaticRecommendation);
@@ -361,6 +391,8 @@ export function selectWorkout(
       advisoryConstraints: manual ? advisoryConstraints : [],
     },
     workout,
+    catalogSource: workout.library ? "intervals" : "static",
+    catalogNote: (workout.library ? "Workout dalla cache Intervals; struttura originale normalizzata." : "Catalogo Coach di fallback: nessun workout Intervals locale compatibile con questa richiesta.") + (regenerate && alternativeCount <= 1 ? " Nessuna alternativa compatibile disponibile: proposta mantenuta." : ""),
     requestCommand: request,
     requestSatisfied: manual ? true :
       request === "leggero"
@@ -371,7 +403,7 @@ export function selectWorkout(
     requested: rank[requested],
     constraints,
     limitingFactors: constraints.filter((c) => c.blocksRequested),
-    duration: templateDuration(workout.structure),
+    duration: minutes(workout),
     config,
     week,
     phase,

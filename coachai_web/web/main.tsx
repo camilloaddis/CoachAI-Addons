@@ -1,3 +1,5 @@
+import { LibrarySettings } from "./LibrarySettings.js";
+import packageMetadata from "../package.json";
 import { apiFetch, type Tab } from "./api.js";
 import { ReadinessPanel } from "./ReadinessPanel.js";
 import { DebugPanel } from "./DebugPanel.js";
@@ -75,7 +77,7 @@ const date = (s: string) => {
     : d.toLocaleDateString("it-IT", { day: "2-digit", month: "short" });
 };
 function App() {
-  const [tab, setTab] = useState<Tab>("summary");
+  const [tab, setTab] = useState<Tab>("today");
   const [authorized, setAuthorized] = useState<boolean | null>(null);
   const [data, setData] = useState<Overview | null>(null);
   const [dayMeals, setDayMeals] = useState<Meal[]>([]);
@@ -146,10 +148,9 @@ function App() {
     };
   }, []);
   const tabs: [Tab, string][] = [
-    ["summary", "Riepilogo"],
-    ["training", "Allenamento"],
-    ["nutrition", "Alimentazione"],
-    ["debug", "Debug"],
+    ["today", "Oggi"],
+    ["trends", "Trend"],
+    ["settings", "Impostazioni"],
   ];
   const nutritionDay = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/Rome",
@@ -196,19 +197,19 @@ function App() {
                   id={`tab-${key}`}
                   role="tab"
                   aria-selected={tab === key}
-                  aria-controls={`panel-${key} workspace-${key}`}
+                  aria-controls={key === "today" ? "panel-today workspace-training workspace-nutrition" : key === "settings" ? "panel-settings workspace-debug workspace-summary" : "panel-trends workspace-trends"}
                   tabIndex={tab === key ? 0 : -1}
                   onClick={() => setTab(key)}
                   onKeyDown={(e) => {
                     const next =
                       e.key === "ArrowRight"
-                        ? (i + 1) % 4
+                        ? (i + 1) % tabs.length
                         : e.key === "ArrowLeft"
-                          ? (i + 3) % 4
+                          ? (i + tabs.length - 1) % tabs.length
                           : e.key === "Home"
                             ? 0
                             : e.key === "End"
-                              ? 3
+                              ? tabs.length - 1
                               : -1;
                     if (next >= 0) {
                       e.preventDefault();
@@ -258,66 +259,19 @@ function App() {
               </div>
             )}
             <div
-              id="panel-summary"
+              id="panel-today"
               role="tabpanel"
-              aria-labelledby="tab-summary"
-              hidden={tab !== "summary"}
+              aria-labelledby="tab-today"
+              hidden={tab !== "today"}
             >
               <ReadinessPanel
                 readiness={data?.readiness ?? null}
                 prescription={data?.prescription}
               />
-              <details className="panel history">
-                <summary>Andamento Readiness registrato</summary>
-                <h2>Andamento Readiness</h2>
-                <p className="muted">
-                  {data?.history.limitation ??
-                    "Caricamento delle valutazioni registrate…"}
-                </p>
-                {!data?.history.available ||
-                data.history.entries.filter((e) => e.score !== null).length <
-                  2 ? (
-                  <p>
-                    Storico non ancora sufficiente per mostrare un andamento.
-                    Sono mostrate solo valutazioni realmente registrate.
-                  </p>
-                ) : (
-                  <div className="tablewrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Giorno</th>
-                          <th>Modello</th>
-                          <th>Readiness</th>
-                          <th>Confidence</th>
-                          <th>Proposta</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {data.history.entries.map((e) => (
-                          <tr key={`${e.date}:${e.model_version ?? "legacy"}`}>
-                            <td>{date(e.date)}</td>
-                            <td>
-                              {!e.model_version || e.model_version === "legacy"
-                                ? "Legacy (non registrato)"
-                                : e.model_version}
-                            </td>
-                            <td>
-                              <span
-                                className="trend-bar"
-                                style={{ width: `${e.score ?? 0}%` }}
-                              />
-                              {nf(e.score, "/100")}
-                            </td>
-                            <td>{nf(e.confidence, "/100")}</td>
-                            <td>{e.recommendation}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </details>
+            </div>
+            <CoachWorkspace tab={tab} meals={dayMeals} refresh={refresh} />
+            <div hidden={tab !== "today"}>
+              <details><summary>Ultima attività e pasti registrati</summary>
               <section className="split">
                 <article className="panel">
                   <div className="panel-title">
@@ -386,27 +340,67 @@ function App() {
                   </div>
                 </article>
               </section>
+              </details>
             </div>
             <section
-              id="panel-training"
+              id="panel-trends"
               role="tabpanel"
-              aria-labelledby="tab-training"
-              hidden={tab !== "training"}
-            >
-              <p className="notice">
-                Le proposte automatiche seguono Readiness e piano. Le categorie
-                manuali rispettano la richiesta e mostrano gli avvisi. La
-                selezione è locale; Intervals rimane in sola lettura.
-              </p>
-            </section>
-            <section
-              id="panel-nutrition"
-              role="tabpanel"
-              aria-labelledby="tab-nutrition"
-              hidden={tab !== "nutrition"}
+              aria-labelledby="tab-trends"
+              hidden={tab !== "trends"}
               className="panel"
             >
-              <h2>Totali di oggi</h2>
+              <details className="panel history">
+                <summary>Andamento Readiness registrato</summary>
+                <h2>Andamento Readiness</h2>
+                <p className="muted">
+                  {data?.history.limitation ??
+                    "Caricamento delle valutazioni registrate…"}
+                </p>
+                {!data?.history.available ||
+                data.history.entries.filter((e) => e.score !== null).length <
+                  2 ? (
+                  <p>
+                    Storico non ancora sufficiente per mostrare un andamento.
+                    Sono mostrate solo valutazioni realmente registrate.
+                  </p>
+                ) : (
+                  <div className="tablewrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Giorno</th>
+                          <th>Modello</th>
+                          <th>Readiness</th>
+                          <th>Confidence</th>
+                          <th>Proposta</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.history.entries.map((e) => (
+                          <tr key={`${e.date}:${e.model_version ?? "legacy"}`}>
+                            <td>{date(e.date)}</td>
+                            <td>
+                              {!e.model_version || e.model_version === "legacy"
+                                ? "Legacy (non registrato)"
+                                : e.model_version}
+                            </td>
+                            <td>
+                              <span
+                                className="trend-bar"
+                                style={{ width: `${e.score ?? 0}%` }}
+                              />
+                              {nf(e.score, "/100")}
+                            </td>
+                            <td>{nf(e.confidence, "/100")}</td>
+                            <td>{e.recommendation}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </details>
+              <h2>Totali registrati oggi</h2>
               <p>
                 {last
                   ? "Riepilogo giornaliero registrato"
@@ -440,18 +434,18 @@ function App() {
               </div>
             </section>
             <section
-              id="panel-debug"
+              id="panel-settings"
               role="tabpanel"
-              aria-labelledby="tab-debug"
-              hidden={tab !== "debug"}
+              aria-labelledby="tab-settings"
+              hidden={tab !== "settings"}
             >
-              <DebugPanel active={tab === "debug"} />
+              <LibrarySettings active={tab === "settings"} />
+              <details><summary>Diagnostica avanzata</summary><DebugPanel active={tab === "settings"} /></details>
             </section>
-            <CoachWorkspace tab={tab} meals={dayMeals} refresh={refresh} />
           </>
         )}
         <footer>
-          Coach AI Web 0.9.1 ·{" "}
+          Coach AI Web {packageMetadata.version} ·{" "}
           {data?.dataSource === "local"
             ? "Database applicativo locale"
             : "Snapshot SQLite in sola lettura"}{" "}

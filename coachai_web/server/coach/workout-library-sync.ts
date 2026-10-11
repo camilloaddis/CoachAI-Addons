@@ -1,3 +1,4 @@
+import { libraryCandidates } from "./library-catalog.js";
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { workoutLibraryRepository } from '../storage/workout-library.js';
@@ -11,6 +12,7 @@ export function workoutLibrarySync(db: DatabaseSync, settings: { enabled?: boole
   const repo = workoutLibraryRepository(db, clock);
   let running: Promise<unknown> | null = null;
   const controller = new AbortController();
+  let timer: ReturnType<typeof setInterval> | undefined;
   const read = (): Record<string, unknown> => {
     const row = db.prepare('SELECT value FROM app_state WHERE key=?').get(key);
     return row ? JSON.parse(String(row.value)) : {};
@@ -20,6 +22,7 @@ export function workoutLibrarySync(db: DatabaseSync, settings: { enabled?: boole
     const state = valid ? repo.syncState(account!) : null;
     const saved = valid ? read() : {};
     return { enabled: settings.enabled === true, configured: valid && !!settings.key,
+      classifiable: valid ? libraryCandidates(db, account).length : 0,
       lastAttempt: state?.lastAttemptAt ?? null, lastSuccess: state?.lastSuccessAt ?? null,
       ...saved, countsCurrent: saved.generation === state?.generation && !!state?.lastSuccessAt, state: state?.status ?? 'never' };
   };
@@ -54,9 +57,24 @@ export function workoutLibrarySync(db: DatabaseSync, settings: { enabled?: boole
       db.prepare('DELETE FROM worker_leases WHERE name=? AND owner=?').run(lease, owner);
     }
   }
-  return { status, syncOnce() {
+  const syncOnce = () => {
     if (running) return Promise.reject(new LibraryError('busy', 0));
     running = run().finally(() => { running = null; });
     return running;
-  }, async stop() { controller.abort(); await running?.catch(() => {}); } };
+  };
+  async function tick() {
+    if (!settings.enabled || !valid || !settings.key || controller.signal.aborted) return;
+    const state = repo.syncState(account!);
+    const now = clock().getTime();
+    if (state?.lastSuccessAt && now - Date.parse(state.lastSuccessAt) < 6 * 3600000) return;
+    if (state?.lastAttemptAt && now - Date.parse(state.lastAttemptAt) < 30 * 60000) return;
+    if (Number(read().cooldownUntil ?? 0) > now) return;
+    await syncOnce().catch(() => {}); // sanitized failure already persisted; busy is harmless
+  }
+  return { status, tick, start() {
+    if (!settings.enabled || timer) return;
+    // First check after one minute: never block server startup on a provider.
+    timer = setInterval(() => { void tick().catch(() => {}); }, 60000);
+    timer.unref();
+  }, syncOnce, async stop() { if (timer) clearInterval(timer); controller.abort(); await running?.catch(() => {}); } };
 }

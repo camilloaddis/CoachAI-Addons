@@ -472,7 +472,7 @@ details ol small {
 }
 .tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   position: sticky;
   top: 0;
@@ -529,7 +529,7 @@ pre {
 }
 @media (max-width: 600px) {
   .tabs {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 4px;
   }
   .tabs button {
@@ -636,3 +636,14 @@ pre {
   .training-mode .actions button { flex: 1 1 110px; }
   .factor-groups { grid-template-columns: 1fr; }
 }
+
+.trend-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:1rem; margin:1rem 0; }
+.trend-cards article { border:1px solid #64748b66; border-radius:12px; padding:1rem; }
+.trend-cards strong { font-size:1.35rem; }
+.trend-table { overflow-x:auto; }
+.trend-table table { width:100%; border-collapse:collapse; }
+.trend-table th,.trend-table td { padding:.6rem; text-align:left; border-bottom:1px solid #64748b66; white-space:nowrap; }
+
+.trend-charts { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:1rem; }
+.trend-chart { margin:0; min-width:0; color:inherit; }
+.trend-chart svg { width:100%; height:auto; color:#528ccb; }

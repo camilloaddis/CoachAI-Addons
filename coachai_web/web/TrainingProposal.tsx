@@ -26,6 +26,12 @@ export function TrainingProposal({
         {manual ? "MODALITÀ MANUALE" : "MODALITÀ COACH AUTOMATICA"}
       </p>
       <h3>{p.workout.name}</h3>
+      {p.advisor && <section aria-label="Motivo della scelta">
+        <strong>{p.advisor.mode === "ai" ? "Scelta AI verificata" : "Consiglio locale"}</strong>
+        <p>{p.advisor.explanation}</p>
+      </section>}
+      <p className="muted">{p.catalogNote ?? "Proposta storica dal catalogo Coach."}</p>
+      {p.workout.library && <p className="muted">Cache aggiornata: {new Date(p.workout.library.syncedAt).toLocaleString("it-IT", { timeZone: "Europe/Rome" })}. Disponibile anche senza collegamento a Intervals.</p>}
       <p>
         {p.requestSatisfied
           ? "Richiesta soddisfatta"
@@ -65,12 +71,13 @@ export function TrainingProposal({
           <FactorGroups factors={p.limitingFactors} />
         </section>
       )}
+      <details><summary>Dettagli allenamento</summary>
       <pre
         className="workout-structure"
         aria-label="Struttura tecnica allenamento"
       >
         {p.workout.structure}
-      </pre>
+      </pre></details>
       <div className="actions">
         <button type="button" onClick={onRegenerate}>
           Rigenera

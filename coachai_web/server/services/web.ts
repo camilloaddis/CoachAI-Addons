@@ -1,3 +1,6 @@
+import { requestWorkoutAdvice, applyWorkoutAdvice } from "../coach/workout-advisor.js";
+import type { CatalogWorkout } from "../coach/library-catalog.js";
+import { workoutLibraryRepository } from "../storage/workout-library.js";
 import { intentForRequest, validateIntent } from "../coach/intent.js";
 import type { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
@@ -29,6 +32,7 @@ export function webServices(
   readiness: () => Promise<Result>,
   fetcher: typeof fetch = fetch,
   clock: () => Date = () => new Date(),
+  libraryAccount?: string,
 ) {
   const records = recordServices(db, clock),
     ai = groqClient(config, fetcher);
@@ -75,6 +79,7 @@ export function webServices(
     }
     const job = (async () => {
       let prepared: unknown;
+      let finalizeWorkout: (() => unknown) | undefined;
       if (action === "workout") {
         const allowed = [
           "allenamento",
@@ -93,31 +98,46 @@ export function webServices(
             typeof body.regenerate !== "boolean")
         )
           fail();
-        let intent;
+        let intent: ReturnType<typeof validateIntent> | undefined;
         try { intent = body.intent === undefined ? intentForRequest(body.request as string) : validateIntent(body.intent); }
         catch { fail(); }
         const command = body.intent !== undefined && intent?.mode === "automatic"
           ? { recommended: "allenamento", lighter: "leggero", harder: "intenso" }[intent.preference]
           : body.request as string;
-        prepared = selectWorkout(
-          db,
-          await readiness(),
-          clock(),
-          command,
-          body.regenerate === true,
-          intent,
-        );
+        let previousWorkout: CatalogWorkout | undefined;
+        if (body.previousProposalId !== undefined) {
+          if (body.regenerate !== true || typeof body.previousProposalId !== "string") fail();
+          const previousPayload = db.prepare("SELECT payload FROM workout_proposals WHERE id=?").get(body.previousProposalId as string)?.payload;
+          if (typeof previousPayload !== "string") throw new ValidationError("stale_proposal");
+          const previous = JSON.parse(previousPayload);
+          if (previous.decision && JSON.stringify(previous.decision.intent) !== JSON.stringify(intent)) fail();
+          previousWorkout = previous.workout;
+        }
+        const initialReadiness = await readiness();
+        const select = (evaluation: Result) => {
+          let candidates: CatalogWorkout[] = [];
+          const plan = selectWorkout(db, evaluation, clock(), command, body.regenerate === true, intent,
+            libraryAccount, previousWorkout, rows => { candidates = rows; });
+          return { plan, candidates };
+        };
+        const initial = select(initialReadiness);
+        const advice = await requestWorkoutAdvice(initial.plan, initial.candidates, config.groqEnabled === true && !!config.groqKey, input => ai.workout(input));
+        const currentReadiness = advice.status === "selected" || advice.status === "provider_unavailable" ? await readiness() : initialReadiness;
+        finalizeWorkout = () => {
+          const current = select(currentReadiness);
+          return applyWorkoutAdvice(current.plan, current.candidates, advice);
+        };
       } else if (action === "select-workout") {
         if (typeof body.id !== "string") fail();
         const payload = db.prepare("SELECT payload FROM workout_proposals WHERE id=?").get(body.id as string)?.payload;
         if (typeof payload !== "string") fail();
         const stored = JSON.parse(payload as string);
-        let intent;
+        let intent: ReturnType<typeof validateIntent> | undefined;
         try { intent = stored.decision ? validateIntent(stored.decision.intent) : undefined; }
         catch { throw new ValidationError("stale_proposal"); }
         prepared = {
           payload,
-          fresh: selectWorkout(db, await readiness(), clock(), stored.requestCommand ?? "allenamento", false, intent),
+          fresh: selectWorkout(db, await readiness(), clock(), stored.requestCommand ?? "allenamento", false, intent, libraryAccount),
         };
       } else if (action === "nutrition-preview") {
         if (
@@ -133,6 +153,7 @@ export function webServices(
         if (duplicate !== null) return duplicate;
         let result: unknown = { saved: true };
         if (action === "workout") {
+          prepared = finalizeWorkout!();
           const id = randomUUID();
           db.prepare(
             "INSERT INTO workout_proposals(id,created_at,payload) VALUES(?,?,?)",
@@ -157,6 +178,13 @@ export function webServices(
           const fresh = selection.fresh;
           if (JSON.stringify(stored) !== JSON.stringify(JSON.parse(selection.payload)))
             throw new ValidationError("stale_proposal");
+          if (stored.workout?.library) {
+            const ref = stored.workout.library;
+            const account = libraryAccount?.replace(/^i?/, "i");
+            const current = account && account === ref.account ? workoutLibraryRepository(db).get(account, ref.id) : null;
+            if (!current?.available || !current.compatible || current.contentHash !== ref.contentHash)
+              throw new ValidationError("stale_proposal");
+          }
           const ranks = [
             "riposo",
             "recupero",
