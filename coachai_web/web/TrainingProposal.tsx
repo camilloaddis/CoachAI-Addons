@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useState } from "react";
+import type { Publication } from "../server/coach/calendar-publication.js";
 import type { Proposal } from "../server/coach/training.js";
 import { categoryLabels } from "../server/coach/intent.js";
 import {
@@ -9,15 +10,21 @@ import {
 } from "./DecisionExplanation.js";
 export function TrainingProposal({
   proposal: p,
-  selected,
+  publication,
+  enabled,
+  sending,
   onRegenerate,
-  onSelect,
+  onPublish,
 }: {
   proposal: Proposal;
-  selected: boolean;
+  publication: Publication | null;
+  enabled: boolean;
+  sending: boolean;
   onRegenerate: () => void;
-  onSelect: () => void;
+  onPublish: (verify: boolean) => void;
 }) {
+  const [confirming, setConfirming] = useState(false);
+  const status = sending || publication?.status === "sending" ? "Invio in corso" : publication?.status === "scheduled" ? "Programmato" : publication ? "Errore" : "Proposto";
   const manual = p.decision?.intent.mode === "manual";
   const warnings = p.decision?.warnings ?? [];
   return (
@@ -82,10 +89,20 @@ export function TrainingProposal({
         <button type="button" onClick={onRegenerate}>
           Rigenera
         </button>
-        <button type="button" onClick={onSelect}>
-          {selected ? "Selezionato" : "Seleziona"}
-        </button>
+        <button type="button" disabled={!enabled || sending || p.duration <= 0 || (!!publication && !publication.retryable)} onClick={() => setConfirming(true)}>Aggiungi a Intervals</button>
+        {publication?.status === "unknown" && <button type="button" onClick={() => onPublish(true)}>Verifica esito</button>}
       </div>
+      <p role="status">{status} · Data della proposta: {p.date}</p>
+      {!enabled && <p className="muted">Abilita intervals_calendar_write_enabled nelle opzioni dell’add-on per programmare allenamenti.</p>}
+      {publication?.status === "scheduled" && <p>Allenamento programmato per {publication.date} · ID Intervals: {publication.remoteId}. Non risulta eseguito.</p>}
+      {publication?.status === "error" && <p role="alert">Intervals ha rifiutato la richiesta. Controlla credenziali e permesso calendario; puoi confermare un nuovo tentativo.</p>}
+      {publication?.status === "unknown" && <p role="alert">Esito non verificato: l’allenamento potrebbe essere già programmato. Nessun reinvio è consentito. Usa Verifica esito o controlla manualmente il calendario Intervals.</p>}
+      {confirming && <section aria-label="Conferma pubblicazione">
+        <p>Aggiungere «{p.workout.name}» al calendario Intervals per il giorno {p.date}?</p>
+        {!p.workout.library && <p role="alert">Questa proposta proviene dal catalogo statico CoachAI, non dalla tua libreria Intervals. Confermando verrà creato un nuovo allenamento con la struttura mostrata.</p>}
+        <button type="button" onClick={() => { setConfirming(false); onPublish(false); }}>Conferma aggiunta</button>
+        <button type="button" onClick={() => setConfirming(false)}>Annulla</button>
+      </section>}
       <details>
         <summary>Spiegazione tecnica completa</summary>
         <h4>

@@ -1,3 +1,4 @@
+import { calendarPublication } from "./coach/calendar-publication.js";
 import { trendService } from "./coach/trends.js";
 import { backupBefore006 } from "./storage/upgrade-backup.js";
 import { workoutLibrarySync } from "./coach/workout-library-sync.js";
@@ -227,6 +228,7 @@ export async function createApp(
       )
     : null;
   const library = store ? workoutLibrarySync(store, { ...intervalSettings, enabled: runtime.intervalsLibrarySyncEnabled }, options.fetcher, options.clock) : null;
+  const calendar = store ? calendarPublication(store, { ...intervalSettings, enabled: runtime.intervalsCalendarWriteEnabled === true && runtime.dataSource === "local" }, readiness, options.fetcher, options.clock) : null;
   const web = store
     ? webServices(
         store,
@@ -274,7 +276,14 @@ export async function createApp(
   app.get("/api/coach", async (request, reply) => {
     reply.header("Cache-Control", "no-store");
     if (!web) return reply.code(503).send({ error: "database_unavailable" });
-    return web.state();
+    const state = web.state();
+    return { ...state, calendarEnabled: calendar?.enabled ?? false, proposals: state.proposals.map(p => ({ ...p, publication: calendar?.summary(String(p.id)) ?? null })) };
+  });
+  app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/coach/proposals/:id/publish", async (request, reply) => {
+    if (!calendar || runtime.dataSource !== "local") return reply.code(409).send({ error: "local_database_required" });
+    if (!request.body || typeof request.body !== "object" || Array.isArray(request.body)) return reply.code(400).send({ error: "invalid_request" });
+    try { return await calendar.publish(request.params.id, request.body); }
+    catch (error) { return reply.code(error instanceof ValidationError ? 400 : 503).send({ error: error instanceof ValidationError ? error.message : "publication_unavailable" }); }
   });
   app.post<{ Params: { action: string }; Body: Record<string, unknown> }>(
     "/api/coach/:action",
@@ -391,7 +400,8 @@ export async function createApp(
         groqEnabled: runtime.groqEnabled ?? false,
         intervalsSyncEnabled: runtime.intervalsSyncEnabled ?? false,
         intervalsDetailsEnabled: runtime.intervalsDetailsEnabled ?? false,
-        intervalsWriteEnabled: false,
+        intervalsWriteEnabled: calendar?.enabled ?? false,
+        intervalsCalendarWriteEnabled: calendar?.enabled ?? false,
       },
       cache: {
         lastSyncAt,
@@ -510,7 +520,8 @@ export async function createApp(
     applicationDatabase: Boolean(store),
     groqEnabled: runtime.groqEnabled ?? false,
     intervalsSyncEnabled: runtime.intervalsSyncEnabled ?? false,
-    intervalsWriteEnabled: false,
+    intervalsWriteEnabled: calendar?.enabled ?? false,
+    intervalsCalendarWriteEnabled: calendar?.enabled ?? false,
     database: existsSync(dbPath),
     ...snapshot(),
     version: packageMetadata.version,

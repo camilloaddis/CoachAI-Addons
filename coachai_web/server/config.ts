@@ -3,6 +3,7 @@ export type RuntimeConfig = {
   groqEnabled?: boolean;
   groqKey?: string;
   groqModel?: string;
+  intervalsCalendarWriteEnabled?: boolean;
   intervalsLibrarySyncEnabled?: boolean;
   intervalsSyncEnabled?: boolean;
   intervalsDetailsEnabled?: boolean;
@@ -36,6 +37,7 @@ export function runtimeConfig(
     groqEnabled: bool("groq_enabled", "GROQ_ENABLED"),
     groqKey: string("groq_api_key", "GROQ_API_KEY"),
     groqModel: string("groq_model", "GROQ_MODEL") || "openai/gpt-oss-120b",
+    intervalsCalendarWriteEnabled: bool("intervals_calendar_write_enabled", "INTERVALS_CALENDAR_WRITE_ENABLED"),
     intervalsLibrarySyncEnabled: bool("intervals_library_sync_enabled", "INTERVALS_LIBRARY_SYNC_ENABLED"),
     intervalsSyncEnabled: bool(
       "intervals_sync_enabled",

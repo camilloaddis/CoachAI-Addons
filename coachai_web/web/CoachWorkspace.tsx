@@ -1,3 +1,4 @@
+import type { Publication } from "../server/coach/calendar-publication.js";
 import { TrendsPanel } from "./TrendsPanel.js";
 import { TrainingProposal } from "./TrainingProposal.js";
 import { apiFetch, type Tab } from "./api.js";
@@ -20,8 +21,8 @@ type CoachState = {
   activities: Activity[];
   groqEnabled: boolean;
   config: Proposal["config"];
-  selected: string | null;
-  proposals: { id: string; proposal: Proposal }[];
+  calendarEnabled: boolean;
+  proposals: { id: string; proposal: Proposal; publication: Publication | null }[];
   drafts: { id: string; meals: NutritionMeal[] }[];
   reports: { daily: string; weekly: string; weight: string };
   recovery: { legs: number; observation_date: string; note: string | null }[];
@@ -80,6 +81,8 @@ export function CoachWorkspace({
     id: string;
     meals: NutritionMeal[];
   } | null>(null);
+  const [sendingId, setSendingId] = useState<string | null>(null);
+  const [publications, setPublications] = useState<Record<string, Publication>>({});
   const keys = useRef(new Map<string, string>());
   async function api(path: string, body?: object, key?: string) {
     const r = await apiFetch(path, {
@@ -114,9 +117,33 @@ export function CoachWorkspace({
   async function load() {
     const s = (await api("/api/coach")) as CoachState;
     setState(s);
+    setPublications(Object.fromEntries(s.proposals.filter(p => p.publication).map(p => [p.id, p.publication!])));
     if (!proposal && s.proposals.length) setProposal(s.proposals[0]);
     if (!draft && s.drafts.length) setDraft(s.drafts[0]);
     return s;
+  }
+  async function publish(verify: boolean) {
+    if (!proposal || busy) return;
+    const current = proposal;
+    await perform(async () => {
+      setSendingId(current.id);
+      try {
+        const response = await apiFetch(`/api/coach/proposals/${encodeURIComponent(current.id)}/publish`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ date: current.proposal.date, allowStatic: !current.proposal.workout.library, verify }),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          setMessage(result.error === "stale_proposal" ? "La proposta non è più valida: genera un nuovo allenamento." : "Pubblicazione non disponibile. Controlla configurazione e sessione.");
+          await load();
+          return;
+        }
+        setPublications(p => ({ ...p, [current.id]: result }));
+      } catch {
+        setPublications(p => ({ ...p, [current.id]: { status: "unknown", date: current.proposal.date, remoteId: null, retryable: false, error: "ambiguous_result" } }));
+        try { await load(); } catch { /* Never suggest resending an uncertain creation. */ }
+      } finally { setSendingId(null); }
+    });
   }
   async function action(name: string, body: object) {
     const signature = JSON.stringify({ name, body });
@@ -256,8 +283,11 @@ export function CoachWorkspace({
             </details>
             {proposal && (
               <TrainingProposal
+                key={proposal.id}
                 proposal={proposal.proposal}
-                selected={state.selected === proposal.id}
+                publication={publications[proposal.id] ?? null}
+                enabled={state.calendarEnabled}
+                sending={sendingId === proposal.id}
                 onRegenerate={() =>
                   void generate(
                     proposal.proposal.requestCommand,
@@ -265,24 +295,7 @@ export function CoachWorkspace({
                     proposal.proposal.decision?.intent,
                   )
                 }
-                onSelect={() =>
-                  void perform(async () => {
-                    const selected = await action("select-workout", {
-                      id: proposal.id,
-                    });
-                    if (selected.decision)
-                      setProposal({
-                        ...proposal,
-                        proposal: {
-                          ...proposal.proposal,
-                          decision: selected.decision,
-                        },
-                      });
-                    setMessage(
-                      "Allenamento selezionato localmente. Nessun caricamento su Intervals.",
-                    );
-                  })
-                }
+                onPublish={verify => void publish(verify)}
               />
             )}
             <details>
@@ -292,7 +305,7 @@ export function CoachWorkspace({
                   <strong>{p.proposal.workout.name}</strong>
                   <p>
                     {p.proposal.date} · {p.proposal.duration} min ·{" "}
-                    {state.selected === p.id ? "Selezionato" : "Proposta"}
+                    {publications[p.id]?.status === "scheduled" ? "Programmato" : "Proposta"}
                   </p>
                   <pre className="workout-structure">
                     {p.proposal.workout.structure}

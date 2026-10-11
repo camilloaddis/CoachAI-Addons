@@ -1,3 +1,17 @@
+# Coach AI Web 1.0.1
+
+Pubblicazione opzionale degli allenamenti proposti sul calendario Intervals.icu.
+Default disabilitato: `intervals_calendar_write_enabled=false`; nessuna integrazione
+viene abilitata dall’aggiornamento. Database SQLite e configurazione preservati,
+SQL001–006 invariati. [Uso, contratto API e gestione degli esiti ambigui](../../addons/coachai_web/README.md#101--pubblicazione-sul-calendario).
+
+Prima di aggiornare, scaricare un backup completo Home Assistant. Ripristinare un
+backup antecedente all’invio perde lo stato di idempotenza: controllare il calendario
+Intervals prima di ripubblicare. Non disinstallare per aggiornare. Nessuna release
+o pubblicazione viene effettuata dalla PR di implementazione.
+
+---
+
 # Coach AI Web 1.0.0
 
 Versione candidata per Home Assistant: allenamento, libreria workout Intervals.icu, diario alimentare e trend 7/30 giorni.
