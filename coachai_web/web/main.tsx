@@ -1,6 +1,7 @@
 import { apiFetch, type Tab } from "./api.js";
+import { ReadinessPanel } from "./ReadinessPanel.js";
 import { DebugPanel } from "./DebugPanel.js";
-import type { Factor, Constraint, Result } from "../server/readiness/types.js";
+import type { Constraint, Result } from "../server/readiness/types.js";
 import { CoachWorkspace } from "./CoachWorkspace.js";
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -50,6 +51,7 @@ type Overview = {
       score: number | null;
       confidence: number;
       recommendation: string;
+      model_version?: string;
     }[];
   };
   activities: Activity[];
@@ -66,29 +68,6 @@ const nf = (value: number | null | undefined, suffix = "") =>
   value === null || value === undefined
     ? "—"
     : Math.round(value).toLocaleString("it-IT") + suffix;
-const metric = (value: number | null | undefined) =>
-  value == null
-    ? "—"
-    : value.toLocaleString("it-IT", {
-        minimumFractionDigits: 1,
-        maximumFractionDigits: 1,
-      });
-const categories: { key: Factor["category"]; label: string }[] = [
-  { key: "physiology", label: "Recupero misurato" },
-  { key: "load", label: "Carico" },
-  { key: "activity", label: "Attività eseguite" },
-  { key: "feedback", label: "Sensazioni e tempi" },
-  { key: "data", label: "Dati e affidabilità" },
-  { key: "schedule", label: "Calendario" },
-  { key: "plan", label: "Piano" },
-  { key: "request", label: "Richiesta" },
-];
-const markers: Record<Factor["polarity"], string> = {
-  positive: "✓ Positivo",
-  negative: "! Negativo",
-  neutral: "• Neutro",
-  uncertain: "? Incerto",
-};
 const date = (s: string) => {
   const d = new Date(s + "T12:00:00");
   return Number.isNaN(d.valueOf())
@@ -284,169 +263,10 @@ function App() {
               aria-labelledby="tab-summary"
               hidden={tab !== "summary"}
             >
-              <section
-                className="panel readiness"
-                aria-label="Readiness e raccomandazione"
-              >
-                <div className="readiness-top">
-                  <div>
-                    <p className="eyebrow">
-                      READINESS · {data?.readiness.date ?? "oggi"}
-                    </p>
-                    <div className="score">
-                      {nf(data?.readiness.score)}
-                      <span>/100</span>
-                    </div>
-                    <p className="muted">
-                      {!data ||
-                      data.readiness.assessmentState === "missing_data"
-                        ? data?.readiness.score == null
-                          ? "Dati insufficienti per valutare la disponibilità"
-                          : "Valutazione parziale · rispettare i limiti prudenti"
-                        : data.readiness.assessmentState ===
-                            "insufficient_recovery"
-                          ? "Recupero da privilegiare · valutazione prudenziale"
-                          : "Allenamento possibile entro i limiti indicati"}
-                    </p>
-                  </div>
-                  <div className="recommendation">
-                    <p className="eyebrow">PROPOSTA DI OGGI</p>
-                    <h2>
-                      {data?.prescription?.recommendation ??
-                        data?.readiness.recommendation ??
-                        "Valutazione in corso"}
-                    </h2>
-                    <p>
-                      Affidabilità (confidence){" "}
-                      <strong>{nf(data?.readiness.confidence, "/100")}</strong>
-                    </p>
-                    <p className="muted">
-                      {
-                        {
-                          complete: "Valutazione completa",
-                          provisional: "Valutazione provvisoria",
-                          unavailable: "Non valutabile",
-                        }[data?.readiness.completeness ?? "unavailable"]
-                      }{" "}
-                      · FTP operativa {data?.readiness.profile.ftp ?? "—"} W
-                    </p>
-                  </div>
-                </div>
-                <div className="metrics">
-                  <div className="stat">
-                    <span>CTL · forma</span>
-                    <b>{metric(data?.readiness.metrics.ctl)}</b>
-                  </div>
-                  <div className="stat">
-                    <span>ATL · fatica</span>
-                    <b>{metric(data?.readiness.metrics.atl)}</b>
-                  </div>
-                  <div className="stat">
-                    <span>TSB · equilibrio</span>
-                    <b>{metric(data?.readiness.metrics.tsb)}</b>
-                  </div>
-                </div>
-                <p className="muted">
-                  La raccomandazione tiene conto di carico, recupero e copertura
-                  dei dati. Un punteggio alto con confidence bassa non autorizza
-                  allenamenti intensi.
-                </p>
-                <div className="prescription-limits">
-                  <h3>Cosa limita la proposta</h3>
-                  {data?.prescription?.constraints.some((c) => c.applied) ? (
-                    <ul>
-                      {data.prescription.constraints
-                        .filter((c) => c.applied)
-                        .map((c, i) => (
-                          <li key={c.code + String(i)}>
-                            <span className={`factor-marker ${c.polarity}`}>
-                              {markers[c.polarity]}
-                            </span>
-                            {c.text}
-                          </li>
-                        ))}
-                    </ul>
-                  ) : (
-                    <p className="muted">
-                      Nessun limite aggiuntivo rilevato rispetto al punteggio.
-                    </p>
-                  )}
-                </div>
-                <div className="factor-groups">
-                  {categories
-                    .filter(
-                      (group) =>
-                        group.key !== "activity" && group.key !== "data",
-                    )
-                    .map((group) => {
-                      const factors = (data?.readiness.factors ?? []).filter(
-                        (f) =>
-                          f.category === group.key &&
-                          !(data?.prescription?.constraints ?? []).some(
-                            (c) => c.applied && c.code === f.code,
-                          ),
-                      );
-                      return factors.length ? (
-                        <section key={group.key}>
-                          <h3>{group.label}</h3>
-                          <ul>
-                            {factors.slice(0, 3).map((f, i) => (
-                              <li key={f.code + i}>
-                                <span className={`factor-marker ${f.polarity}`}>
-                                  {markers[f.polarity]}
-                                </span>
-                                {f.text}
-                              </li>
-                            ))}
-                          </ul>
-                        </section>
-                      ) : null;
-                    })}
-                </div>
-                <details>
-                  <summary>
-                    Spiegazione tecnica completa e dati mancanti
-                  </summary>
-                  {categories.map((group) => {
-                    const factors = (data?.readiness.factors ?? []).filter(
-                      (f) => f.category === group.key,
-                    );
-                    return factors.length ? (
-                      <section key={group.key}>
-                        <h3>{group.label}</h3>
-                        <ul>
-                          {factors.map((f, i) => (
-                            <li key={f.code + i}>
-                              <span className={`factor-marker ${f.polarity}`}>
-                                {markers[f.polarity]}
-                              </span>
-                              {f.text}
-                              <small className="technical-code">
-                                {f.code} · {f.evidence}
-                              </small>
-                            </li>
-                          ))}
-                        </ul>
-                      </section>
-                    ) : null;
-                  })}
-                  <h3>Regole di prescrizione, in ordine</h3>
-                  <ol>
-                    {data?.prescription?.constraints.map((c, i) => (
-                      <li key={c.code + i}>
-                        {c.text}{" "}
-                        <small>
-                          {c.source}: {c.before} → {c.after}
-                          {c.applied
-                            ? " · limite applicato"
-                            : " · non riduce ulteriormente"}
-                          {c.blocksRequested ? " · impedisce la richiesta" : ""}
-                        </small>
-                      </li>
-                    ))}
-                  </ol>
-                </details>
-              </section>
+              <ReadinessPanel
+                readiness={data?.readiness ?? null}
+                prescription={data?.prescription}
+              />
               <details className="panel history">
                 <summary>Andamento Readiness registrato</summary>
                 <h2>Andamento Readiness</h2>
@@ -459,8 +279,7 @@ function App() {
                   2 ? (
                   <p>
                     Storico non ancora sufficiente per mostrare un andamento.
-                    Sono registrate solo le valutazioni effettuate da questa
-                    versione.
+                    Sono mostrate solo valutazioni realmente registrate.
                   </p>
                 ) : (
                   <div className="tablewrap">
@@ -468,6 +287,7 @@ function App() {
                       <thead>
                         <tr>
                           <th>Giorno</th>
+                          <th>Modello</th>
                           <th>Readiness</th>
                           <th>Confidence</th>
                           <th>Proposta</th>
@@ -475,8 +295,13 @@ function App() {
                       </thead>
                       <tbody>
                         {data.history.entries.map((e) => (
-                          <tr key={e.date}>
+                          <tr key={`${e.date}:${e.model_version ?? "legacy"}`}>
                             <td>{date(e.date)}</td>
+                            <td>
+                              {!e.model_version || e.model_version === "legacy"
+                                ? "Legacy (non registrato)"
+                                : e.model_version}
+                            </td>
                             <td>
                               <span
                                 className="trend-bar"
@@ -569,9 +394,9 @@ function App() {
               hidden={tab !== "training"}
             >
               <p className="notice">
-                Le proposte rispettano Readiness e limiti: una richiesta intensa
-                può ricevere un’alternativa motivata. La selezione è locale;
-                Intervals rimane in sola lettura.
+                Le proposte automatiche seguono Readiness e piano. Le categorie
+                manuali rispettano la richiesta e mostrano gli avvisi. La
+                selezione è locale; Intervals rimane in sola lettura.
               </p>
             </section>
             <section
@@ -626,7 +451,7 @@ function App() {
           </>
         )}
         <footer>
-          Coach AI Web 0.8.0 ·{" "}
+          Coach AI Web 0.9.0 ·{" "}
           {data?.dataSource === "local"
             ? "Database applicativo locale"
             : "Snapshot SQLite in sola lettura"}{" "}

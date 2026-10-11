@@ -1,4 +1,12 @@
+import { planAutomatic } from "../coach/planner.js";
+export { recommendations } from "../coach/planner.js";
+import {
+  physiologicalAvailability,
+  sleepDuration,
+  applyScoreAdjustments,
+} from "./physiology.js";
 import { wellnessDiagnostics, derivedMetric } from "./diagnostics.js";
+import { assessDataQuality } from "./confidence.js";
 import { assessIntensity } from "./intensity.js";
 import { compareActivities } from "./telemetry.js";
 import {
@@ -8,16 +16,7 @@ import {
   type Result,
   type Factor,
   type Constraint,
-  type Recommendation,
 } from "./types.js";
-export const recommendations: Recommendation[] = [
-  "riposo",
-  "recupero",
-  "endurance",
-  "tempo",
-  "sweet spot/soglia",
-  "VO2max",
-];
 export function evaluate(input: Input): Result {
   const { date } = input;
   if (!validDate(date)) throw new Error("Invalid evaluation date");
@@ -35,32 +34,26 @@ export function evaluate(input: Input): Result {
     factors.push(f);
     return f;
   }
-  function limit(
+  const physiologicalSignals: {
+    code: string;
+    maximum: number;
+    reason: string;
+  }[] = [];
+  function physiologyLimit(
     code: string,
     category: Factor["category"],
     evidence: Factor["evidence"],
-    ceiling: number,
+    legacyLevel: number,
     text: string,
   ) {
-    const f = factor(
-      code,
-      category,
-      evidence === "missing" || evidence === "inferred"
-        ? "uncertain"
-        : evidence === "policy"
-          ? "neutral"
-          : "negative",
-      evidence,
-      text,
+    // These measured/current signals affect the visible score, not a second
+    // intensity ceiling. The previous physiological safety severity is retained.
+    const maximum = legacyLevel === 0 ? 34 : legacyLevel === 1 ? 49 : 59;
+    factor(
+      code, category, "negative", evidence,
+      `${text} Readiness fisiologica massima ${maximum}/100.`,
     );
-    constraints.push({
-      ...f,
-      ceiling,
-      before: 5,
-      after: ceiling,
-      applied: false,
-      source: "readiness",
-    });
+    physiologicalSignals.push({ code, maximum, reason: text });
   }
   const metricDiagnostics = wellnessDiagnostics(input.wellness, date);
   const current = input.wellness.find((w) => w.date === date),
@@ -96,7 +89,7 @@ export function evaluate(input: Input): Result {
       : null;
   const assessments = recent.map(assessIntensity);
   const hard = new Set(
-    assessments.filter((a) => a.isHard === true).map((a) => a.date),
+    assessments.filter((a) => a.isHard === true && a.evidence === "measured").map((a) => a.date),
   );
   for (const a of assessments)
     factor(
@@ -121,14 +114,13 @@ export function evaluate(input: Input): Result {
     consecutive++;
   let sum = 0,
     weight = 0,
-    confidence = 0;
+    probableIntensitySequence = false;
   const add = (score: number, w: number) => {
     sum += score * w;
     weight += w;
   };
   if (tsb !== null) {
     add(tsb < -30 ? 20 : tsb < -20 ? 40 : tsb < -10 ? 60 : 85, 30);
-    confidence += 20;
     factor(
       "tsb",
       "physiology",
@@ -137,7 +129,7 @@ export function evaluate(input: Input): Result {
       `CTL ${ctl!.toFixed(1)}, ATL ${atl!.toFixed(1)}, TSB ${tsb.toFixed(1)} (CTL − ATL).`,
     );
     if (tsb < -30)
-      limit(
+      physiologyLimit(
         "tsb_extreme",
         "physiology",
         "measured",
@@ -145,7 +137,7 @@ export function evaluate(input: Input): Result {
         "Fatica accumulata molto elevata: riposo.",
       );
     else if (tsb < -20)
-      limit(
+      physiologyLimit(
         "tsb_high",
         "physiology",
         "measured",
@@ -153,7 +145,7 @@ export function evaluate(input: Input): Result {
         "TSB sotto −20: recupero.",
       );
     else if (tsb < -10)
-      limit(
+      physiologyLimit(
         "tsb_moderate",
         "physiology",
         "measured",
@@ -161,7 +153,7 @@ export function evaluate(input: Input): Result {
         "TSB sotto −10: endurance.",
       );
     if (ctl! > 0 && atl! / ctl! > 1.5)
-      limit(
+      physiologyLimit(
         "atl_ratio",
         "load",
         "measured",
@@ -191,7 +183,6 @@ export function evaluate(input: Input): Result {
         moderate = inverted ? ratio > 1.05 : ratio < 0.9;
       diagnostic.baseline.value = mean;
       add(bad ? 30 : moderate ? 60 : 90, 20);
-      confidence += 15;
       factor(
         key,
         "physiology",
@@ -200,7 +191,7 @@ export function evaluate(input: Input): Result {
         `${label}: ${value}, baseline ${mean.toFixed(1)} (${values.length} giorni).`,
       );
       if (bad)
-        limit(
+        physiologyLimit(
           `${key}_low_recovery`,
           "physiology",
           "measured",
@@ -215,7 +206,6 @@ export function evaluate(input: Input): Result {
   const sleep = current?.sleepScore ?? null;
   if (sleep !== null) {
     add(sleep, 15);
-    confidence += 15;
     factor(
       "sleep",
       "physiology",
@@ -224,7 +214,7 @@ export function evaluate(input: Input): Result {
       `Qualità del sonno ${sleep}/100.`,
     );
     if (sleep < 50)
-      limit(
+      physiologyLimit(
         "sleep_low",
         "physiology",
         "measured",
@@ -232,6 +222,16 @@ export function evaluate(input: Input): Result {
         "Sonno sotto 50/100: recupero.",
       );
   } else missing.push("Sleep score odierno assente.");
+  const sleepSecs = sleepDuration(current?.sleepSecs);
+  if (sleepSecs !== null) {
+    factor("sleep_duration", "physiology", sleepSecs < 5 * 3600 ? "negative" : "neutral", "measured",
+      `Durata sonno odierna ${(sleepSecs / 3600).toFixed(1)} ore (sleepSecs).`);
+    if (sleepSecs < 5 * 3600)
+      physiologyLimit("sleep_short", "physiology", "measured", 2,
+        "Sonno effettivo inferiore a 5 ore: disponibilità fisiologica limitata a endurance.");
+  } else {
+    missing.push("Durata sonno odierna non disponibile o non valida: non stimata dal Sleep Score.");
+  }
   const feedbackContext = input.feedback.filter(
     (f) =>
       (f.activityDate !== null
@@ -256,6 +256,8 @@ export function evaluate(input: Input): Result {
     .filter((f) => f.legs <= 2)
     .sort((a, b) => b.sensationDate!.localeCompare(a.sensationDate!))[0];
   for (const f of feedbackContext) {
+    // Historical and undated observations remain diagnostic only. They must
+    // not change confidence and indirectly activate intensity ceilings.
     const context =
       f.context === "activity"
         ? "activity"
@@ -273,25 +275,15 @@ export function evaluate(input: Input): Result {
             ? "positive"
             : "neutral",
       context === "ambiguous" ? "inferred" : "subjective",
-      `Gambe ${f.legs}/5: ${context === "activity" ? "valutazione retrospettiva della seduta, non recupero attuale" : context === "current" ? "stato di recupero dichiarato" : "significato temporale non verificato"}; ${context === "current" ? "riferimento recupero" : "attività"} ${context === "current" ? (f.sensationDate ?? "non registrato") : f.activityDate}, inserimento/ultima modifica ${f.updatedAt ?? "n/d"}, sensazione ${f.sensationDate ?? "non registrata"}.`,
+      `Gambe ${f.legs}/5: ${context === "activity" ? "feedback storico della seduta, escluso dai limiti del recupero attuale" : context === "current" ? "recupero attuale esplicitamente datato" : "feedback ambiguo: significato temporale non verificato, escluso dai limiti del recupero attuale"}; ${context === "current" ? "riferimento recupero" : "attività"} ${context === "current" ? (f.sensationDate ?? "non registrato") : f.activityDate}, inserimento/ultima modifica ${f.updatedAt ?? "n/d"}, sensazione ${f.sensationDate ?? "non registrata"}.`,
     );
   }
-  const ambiguous = feedbackContext.some(
-    (f) =>
-      (f.context ?? "ambiguous") === "ambiguous" ||
-      (f.context === "current" && !f.sensationDate),
-  );
-  if (ambiguous)
-    missing.push(
-      "Feedback ambiguo: non misura del recupero attuale; cautela fino a due giorni dalla data attività.",
-    );
   if (!currentFeedback.length)
     missing.push("Feedback sul recupero attuale esplicito assente.");
   const historyReliable =
     input.historyComplete &&
     recent.every((a) => a.load !== null) &&
     assessments.every((a) => a.status === "confermata");
-  confidence += historyReliable ? 25 : recent.length ? 10 : 0;
   if (!historyReliable)
     missing.push(
       "Storico attività completo con intensità confermata non disponibile.",
@@ -300,77 +292,14 @@ export function evaluate(input: Input): Result {
     missing.push(
       "Intensità non determinabile negli ultimi 7 giorni: distribuzione eseguita non disponibile.",
     );
-    limit(
-      "unknown_intensity",
-      "data",
-      "missing",
-      2,
-      "Intensità non determinabile negli ultimi 7 giorni: nessuna seduta considerata facile dalla sola media.",
-    );
   }
-  if (assessments.some((a) => a.status === "probabile" && a.isHard === false))
-    limit(
-      "uncertain_nonhard_intensity",
-      "data",
-      "inferred",
-      2,
-      "Seduta probabilmente moderata, ma intervalli brevi non esclusi: massimo endurance.",
-    );
-  if (recent.some((a) => a.load === null))
-    limit(
-      "activity_load_missing",
-      "data",
-      "missing",
-      2,
-      "Carico di una o più attività assente: massimo endurance, carico totale non noto.",
-    );
-  if (!input.historyComplete)
-    limit(
-      "history_incomplete",
-      "data",
-      "missing",
-      2,
-      "Storico attività non completo: massimo endurance.",
-    );
-  if (ambiguous) confidence = Math.max(0, confidence - 5);
   if (negativeFeedback)
-    limit(
+    physiologyLimit(
       "negative_legs",
       "feedback",
       "subjective",
       1,
       `Recupero attuale negativo dichiarato per ${negativeFeedback.sensationDate}: recupero prudenziale, valido fino al ${shift(negativeFeedback.sensationDate!, 2)}.`,
-    );
-  if (
-    feedbackContext.some(
-      (f) =>
-        ((f.context ?? "ambiguous") === "ambiguous" ||
-          (f.context === "current" && !f.sensationDate)) &&
-        f.legs <= 2,
-    )
-  )
-    limit(
-      "ambiguous_feedback",
-      "feedback",
-      "inferred",
-      2,
-      "Feedback negativo dal significato incerto: massimo endurance nella finestra di due giorni dell’attività; non prova affaticamento attuale.",
-    );
-  if (
-    feedbackContext.some(
-      (f) =>
-        f.context === "activity" &&
-        f.legs <= 2 &&
-        f.activityDate !== null &&
-        f.activityDate >= shift(date, -1),
-    )
-  )
-    limit(
-      "retrospective_session",
-      "plan",
-      "subjective",
-      2,
-      "Seduta oggi/ieri percepita faticosa: pianificare endurance, non interpretare come recupero attuale. Carico misurato invariato; calibrazione soggettiva della seduta da verificare.",
     );
   if (load7 !== null) {
     factor(
@@ -381,7 +310,7 @@ export function evaluate(input: Input): Result {
       `Carico osservato ultimi 7 giorni: ${Math.round(load7)}${input.historyComplete ? "" : " (copertura non verificata)"}.`,
     );
     if (ctl !== null && ctl > 0 && load7 > ctl * 7 * 1.5) {
-      limit(
+      physiologyLimit(
         "load7_high",
         "load",
         "measured",
@@ -399,7 +328,7 @@ export function evaluate(input: Input): Result {
     );
   });
   if (heavyDay) {
-    limit(
+    physiologyLimit(
       "heavy_day",
       "load",
       "measured",
@@ -408,156 +337,53 @@ export function evaluate(input: Input): Result {
     );
     add(45, 10);
   }
-  if (consecutive >= 2) {
-    const measured = assessments
-      .filter((a) => {
-        const end = hard.has(date) ? date : shift(date, -1);
-        return (
-          a.isHard === true &&
-          a.date >= shift(end, 1 - consecutive) &&
-          a.date <= end
-        );
-      })
-      .every((a) => a.isHard !== true || a.evidence === "measured");
-    limit(
-      "consecutive_intensity",
-      "activity",
-      measured ? "measured" : "inferred",
-      1,
-      measured
-        ? `${consecutive} giornate consecutive con intensità misurata: interrompere la sequenza.`
-        : `${consecutive} giornate consecutive con intensità solo probabile: recupero cautelativo per incertezza, non prova di affaticamento attuale.`,
-    );
-    if (measured) add(35, 10);
-    else {
-      confidence = Math.max(0, confidence - 5);
-      missing.push(
-        "Sequenza intensa solo probabile: esecuzione non verificata.",
-      );
-    }
-  } else if (hard.has(date) || hard.has(shift(date, -1)))
-    limit(
-      "recent_intensity",
-      "activity",
-      assessments.some(
-        (a) =>
-          a.isHard === true &&
-          a.evidence === "inferred" &&
-          a.date >= shift(date, -1),
-      )
-        ? "inferred"
-        : "measured",
-      2,
-      "Intensità oggi/ieri: evitare un’altra seduta intensa.",
-    );
-  const objective =
-    tsb !== null ||
-    (current?.hrv !== null && current?.hrv !== undefined) ||
-    sleep !== null;
+  const possibleHard = new Set(assessments.filter(a => a.isHard === true).map(a => a.date));
+  let possibleSequence = 0;
+  const end = possibleHard.has(date) ? date : shift(date, -1);
+  for (let d = end; possibleHard.has(d); d = shift(d, -1)) possibleSequence++;
+  probableIntensitySequence = possibleSequence >= 2 && assessments.some(a =>
+    a.isHard === true && a.evidence !== "measured" && a.date >= shift(end, 1 - possibleSequence) && a.date <= end);
+  if (probableIntensitySequence) missing.push("Sequenza intensa solo probabile: esecuzione non verificata.");
   const conflict =
     (negativeFeedback &&
       ((tsb !== null && tsb >= -10) || (sleep !== null && sleep >= 80))) ||
     (currentFeedback.some((f) => f.legs >= 4) && tsb !== null && tsb < -20);
   if (conflict) {
-    confidence = Math.max(0, confidence - 15);
     factor(
       "conflicting_feedback",
       "feedback",
       "uncertain",
-      ambiguous ? "inferred" : "subjective",
+      "subjective",
       "Dati oggettivi e feedback discordanti: prevale il segnale negativo attuale esplicitamente datato.",
     );
   }
-  const score = weight
+  const rawScore = weight
     ? Math.round(Math.max(0, Math.min(100, sum / weight)))
     : null;
-  if (!current) {
-    limit(
-      "wellness_absent",
-      "data",
-      "missing",
-      1,
-      "Wellness odierno assente: nessun dato vecchio usato come dato di oggi.",
-    );
-    missing.push(
-      "Wellness odierno assente: nessun dato vecchio usato come dato di oggi.",
-    );
-  }
-  if (current && !wellnessComplete)
-    limit(
-      "wellness_incomplete",
-      "data",
-      "missing",
-      2,
-      "Wellness o baseline di recupero incompleti: massimo endurance, nessuna intensità impegnativa basata su dati insufficienti.",
-    );
-  if (!objective || confidence < 40)
-    limit(
-      "confidence_low",
-      "data",
-      "missing",
-      1,
-      "Confidence sotto 40 o nessun segnale oggettivo: recupero prudenziale.",
-    );
-  else if (confidence < 75)
-    limit(
-      "confidence_partial",
-      "data",
-      "missing",
-      2,
-      "Confidence sotto 75: massimo endurance.",
-    );
-  const weekday = new Date(date + "T12:00:00Z").getUTCDay(),
-    day =
-      weekday === 1 || weekday === 5
-        ? "strutturato"
-        : weekday >= 2 && weekday <= 4
-          ? "commuting"
-          : "lungo weekend";
-  if (day !== "strutturato")
-    limit(
-      "weekly_schedule",
-      "schedule",
-      "policy",
-      2,
-      `${day}: endurance controllata, se recupero adeguato.`,
-    );
-  else if (weekday === 1)
-    limit(
-      "monday_schedule",
-      "schedule",
-      "policy",
-      4,
-      "Lunedì: privilegiare sweet spot/soglia per FTP e salita.",
-    );
-  else
-    factor(
-      "friday_schedule",
-      "schedule",
-      "neutral",
-      "policy",
-      "Venerdì: VO2max solo con recupero e copertura dati sufficienti.",
-    );
-  let rank =
-    score === null
-      ? 1
-      : score < 35
-        ? 0
-        : score < 50
-          ? 1
-          : score < 65
-            ? 2
-            : score < 75
-              ? 3
-              : score < 85
-                ? 4
-                : 5;
-  for (const c of constraints) {
-    c.before = rank;
-    c.after = Math.min(rank, c.ceiling);
-    c.applied = c.after < c.before;
-    rank = c.after;
-  }
+  const { score, adjustments } = applyScoreAdjustments(rawScore, physiologicalSignals);
+  const quality = assessDataQuality({
+    loadAvailable: tsb !== null,
+    hrvEligible: metricDiagnostics.find((m) => m.key === "hrv")!.scoreEligible === true,
+    restingHREligible: metricDiagnostics.find((m) => m.key === "restingHR")!.scoreEligible === true,
+    sleepAvailable: sleep !== null,
+    historyReliable,
+    hasRecentActivities: recent.length > 0,
+    probableIntensitySequence,
+    conflictingRecovery: Boolean(conflict),
+  });
+  const { confidence } = quality;
+  factors.push(...quality.reasons);
+  const planningContext = {
+    wellnessAvailable: Boolean(current),
+    wellnessComplete,
+    historyComplete: input.historyComplete,
+    missingActivityLoad: recent.some((a) => a.load === null),
+  };
+  const plan = planAutomatic({ date, score, assessments, context: planningContext,
+    physiologyReasons: adjustments.filter(a => a.applied).map(a => a.reason) });
+  constraints.push(...plan.constraints);
+  factors.push(...plan.reasons);
+  if (!current) missing.push("Wellness odierno assente: nessun dato vecchio usato come dato di oggi.");
   for (const [i, text] of [...new Set(missing)].entries())
     factor(`missing:${i}`, "data", "uncertain", "missing", text);
   if (score === null)
@@ -568,22 +394,14 @@ export function evaluate(input: Input): Result {
       "missing",
       "Nessun segnale valutabile: readiness non disponibile, raccomandazione prudente.",
     );
-  const demonstrated = constraints.some(
-    (c) =>
-      c.ceiling <= 1 &&
-      (c.evidence === "measured" || c.evidence === "subjective"),
-  );
-  const uncertain = constraints.some(
-    (c) =>
-      c.ceiling < 5 && (c.evidence === "missing" || c.evidence === "inferred"),
-  );
+  const demonstrated = physiologicalSignals.some((s) => s.maximum <= 49);
   const completeness =
     score === null
       ? "unavailable"
       : !current ||
           confidence < 75 ||
-          uncertain ||
           !baselineComplete ||
+          sleepSecs === null ||
           [
             current.ctl,
             current.atl,
@@ -596,6 +414,11 @@ export function evaluate(input: Input): Result {
   return {
     date,
     score,
+    physiology: {
+      rawScore,
+      availability: physiologicalAvailability(score),
+      adjustments,
+    },
     confidence,
     completeness,
     status:
@@ -610,6 +433,8 @@ export function evaluate(input: Input): Result {
         scoreEligible:
           m.key === "ctl" || m.key === "atl"
             ? tsb !== null
+            : m.key === "sleepSecs"
+              ? sleepSecs !== null
             : m.key === "sleepScore"
               ? sleep !== null
               : m.scoreEligible,
@@ -625,10 +450,10 @@ export function evaluate(input: Input): Result {
     ],
     assessmentState: demonstrated
       ? "insufficient_recovery"
-      : score === null || !current || confidence < 40 || uncertain
+      : score === null || !current || !wellnessComplete
         ? "missing_data"
         : "available",
-    recommendation: recommendations[rank],
+    recommendation: plan.recommendation,
     factors,
     constraints,
     reasons: factors.filter((f) => f.evidence !== "missing").map((f) => f.text),
@@ -642,6 +467,7 @@ export function evaluate(input: Input): Result {
       intensityAssessments: assessments,
       feedback: feedbackContext,
     },
-    profile: { ftp: 220, day },
+    planningContext,
+    profile: { ftp: 220, day: plan.day },
   };
 }

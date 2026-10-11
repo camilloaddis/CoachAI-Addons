@@ -1,5 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { apiFetch } from "./api.js";
+import {
+  FactorGroups,
+  recommendationLabel,
+  scoreLabel,
+} from "./DecisionExplanation.js";
+import type { Factor, Result } from "../server/readiness/types.js";
 import type { MetricDiagnostic } from "../server/readiness/diagnostics.js";
 type Diagnostics = {
   metrics: MetricDiagnostic[];
@@ -11,10 +17,21 @@ type Diagnostics = {
     latestWellnessDate: string | null;
   };
   integrations: Record<string, boolean>;
-  normalized: object;
+  normalized: {
+    score?: number | null;
+    confidence?: number;
+    completeness?: Result["completeness"];
+    physiology?: Result["physiology"];
+    planner?: {
+      mode: string;
+      recommendation: string;
+      week: number | null;
+      phase: string | null;
+    };
+  };
   classification: object[];
   missing: string[];
-  factors: object[];
+  factors: Factor[];
   limits: object[];
   events: object[];
 };
@@ -49,6 +66,50 @@ export function DebugPanel({ active }: { active: boolean }) {
             Copertura {data.cache.coveredDays}/{data.cache.expectedDays} giorni
             · Ultimo wellness {data.cache.latestWellnessDate ?? "assente"}
           </p>
+          <div
+            className="decision-overview diagnostic-decisions"
+            aria-label="Responsabilità del motore"
+          >
+            <section>
+              <h3>Readiness · fisiologia</h3>
+              <p>{scoreLabel(data.normalized.score)}</p>
+              <p className="muted">
+                Solo valutazione del recupero. Le correzioni del punteggio sono
+                consultabili nei dati normalizzati.
+              </p>
+            </section>
+            <section>
+              <h3>Confidence · qualità dati</h3>
+              <p>{scoreLabel(data.normalized.confidence)}</p>
+              <p className="muted">
+                Non applica ceiling e non abbassa Readiness.
+              </p>
+              <FactorGroups
+                factors={data.factors.filter((f) =>
+                  f.code.startsWith("confidence_"),
+                )}
+                technical
+              />
+            </section>
+            <section>
+              <h3>Planner · consiglio automatico</h3>
+              <p>
+                {data.normalized.planner
+                  ? recommendationLabel(data.normalized.planner.recommendation)
+                  : "Non disponibile"}
+              </p>
+              <p className="muted">
+                Calendario, storico misurato e precauzioni sui dati. Non
+                descrive una richiesta manuale.
+              </p>
+              {data.normalized.planner && (
+                <p>
+                  Fase: {data.normalized.planner.phase ?? "non disponibile"} ·
+                  Settimana: {data.normalized.planner.week ?? "—"}
+                </p>
+              )}
+            </section>
+          </div>
           <div className="metric-diagnostics">
             {data.metrics.map((m) => (
               <article className="stat" key={m.key}>
@@ -100,7 +161,10 @@ export function DebugPanel({ active }: { active: boolean }) {
               ["Metriche normalizzate", data.normalized],
               ["Classificazione attività anonimizzata", data.classification],
               ["Motivazioni strutturate", data.factors],
-              ["Limiti applicati", data.limits],
+              [
+                "Catena dei limiti automatici (anche non applicati)",
+                data.limits,
+              ],
               ["Log diagnostici", data.events],
             ] as const
           ).map(([label, value]) => (

@@ -30,13 +30,13 @@ export type Wellness = {
   acquiredAt?: string | null;
   diagnosticRaw?: Partial<
     Record<
-      "ctl" | "atl" | "hrv" | "restingHR" | "sleepScore",
+      "ctl" | "atl" | "hrv" | "restingHR" | "sleepScore" | "sleepSecs",
       number | string | null
     >
   >;
   diagnosticState?: Partial<
     Record<
-      "ctl" | "atl" | "hrv" | "restingHR" | "sleepScore",
+      "ctl" | "atl" | "hrv" | "restingHR" | "sleepScore" | "sleepSecs",
       "missing" | "invalid" | "present"
     >
   >;
@@ -46,6 +46,8 @@ export type Wellness = {
   hrv: number | null;
   restingHR: number | null;
   sleepScore: number | null;
+  /** Intervals wellness duration, seconds; absent in older normalized caches. */
+  sleepSecs?: number | null;
 };
 export type Feedback = {
   context?: "activity" | "current" | "ambiguous";
@@ -120,19 +122,65 @@ export type Recommendation =
   | "tempo"
   | "sweet spot/soglia"
   | "VO2max";
-export type Result = {
+/** Evaluation contract. Legacy state still reflects ceilings until policy extraction. */
+export type ReadinessEvaluation = {
   date: string;
   score: number | null;
-  confidence: number;
+  physiology: {
+    rawScore: number | null;
+    availability: number | null;
+    adjustments: import("./physiology.js").ScoreAdjustment[];
+  };
   status: string;
   completeness: "complete" | "provisional" | "unavailable";
   metricDiagnostics: import("./diagnostics.js").MetricDiagnostic[];
   assessmentState: "missing_data" | "insufficient_recovery" | "available";
-  recommendation: Recommendation;
-  factors: Factor[];
-  constraints: Constraint[];
-  reasons: string[];
+};
+
+/** Data reliability only. Structured reasons are included in legacy factors. */
+export type DataQualityAssessment = {
+  confidence: number;
+  reasons: Factor[];
   missing: string[];
+};
+
+/** Automatic scheduling decision, distinct from physiological assessment. */
+export type AutomaticTrainingDecision = {
+  mode: "automatic";
+  recommendation: Recommendation;
+  constraints: Constraint[];
+  reasons: Factor[];
+};
+
+export type TrainingCategory =
+  | "rest"
+  | "recovery"
+  | "endurance"
+  | "tempo"
+  | "sweet_spot"
+  | "threshold"
+  | "vo2max"
+  | "strength";
+
+/** Explicit manual category or automatic preference; validated at the API boundary. */
+export type TrainingIntent =
+  | {
+      mode: "automatic";
+      preference: "recommended" | "lighter" | "harder";
+      category?: never;
+    }
+  | {
+      mode: "manual";
+      category: TrainingCategory;
+      preference?: never;
+    };
+
+/** Compatibility envelope; physiology diagnostics are additive. */
+export type Result = ReadinessEvaluation &
+  Pick<DataQualityAssessment, "confidence" | "missing"> &
+  Pick<AutomaticTrainingDecision, "recommendation" | "constraints"> & {
+  factors: Factor[];
+  reasons: string[];
   metrics: {
     ctl: number | null;
     atl: number | null;
@@ -142,6 +190,7 @@ export type Result = {
     intensityAssessments: IntensityAssessment[];
     feedback: Feedback[];
   };
+  planningContext: import("../coach/planner.js").PlanningContext;
   profile: { ftp: number; day: string };
 };
 export function number(value: unknown, min = 0, max = Infinity): number | null {

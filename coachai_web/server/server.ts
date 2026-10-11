@@ -312,6 +312,7 @@ export async function createApp(
     ).updatedAt;
     const age = lastSyncAt ? now.getTime() - Date.parse(lastSyncAt) : NaN;
     const evaluated = await readiness();
+    const prescription = store ? selectWorkout(store, evaluated, now) : null;
     // Stale cache may be inspected, but these observations never re-enter scoring.
     const cachedWellness =
       store
@@ -333,7 +334,7 @@ export async function createApp(
       if (
         m.normalized !== null ||
         m.state === "invalid" ||
-        !["ctl", "atl", "hrv", "restingHR", "sleepScore"].includes(m.key)
+        !["ctl", "atl", "hrv", "restingHR", "sleepScore", "sleepSecs"].includes(m.key)
       )
         return m;
       const reference = wellnessDiagnostics(cachedWellness, today(now)).find(
@@ -389,6 +390,13 @@ export async function createApp(
       normalized: {
         date: evaluated.date,
         score: evaluated.score,
+        physiology: evaluated.physiology,
+        planner: {
+          mode: "automatic",
+          recommendation: prescription?.recommendation ?? evaluated.recommendation,
+          week: prescription?.week ?? null,
+          phase: prescription?.phase ?? null,
+        },
         confidence: evaluated.confidence,
         completeness: evaluated.completeness,
         ctl: evaluated.metrics.ctl,
@@ -412,7 +420,7 @@ export async function createApp(
       factors: evaluated.factors.filter(
         (f) => f.category !== "activity" && f.category !== "feedback",
       ),
-      limits: evaluated.constraints.map((c) => ({
+      limits: (prescription?.constraints ?? evaluated.constraints).map((c) => ({
         code: c.code,
         category: c.category,
         evidence: c.evidence,
@@ -420,6 +428,7 @@ export async function createApp(
         before: c.before,
         after: c.after,
         applied: c.applied,
+        blocksRequested: c.blocksRequested ?? false,
       })),
       events:
         store
@@ -475,7 +484,7 @@ export async function createApp(
     intervalsWriteEnabled: false,
     database: existsSync(dbPath),
     ...snapshot(),
-    version: "0.8.0",
+    version: "0.9.0",
   }));
   app.get("/api/overview", async () => {
     const availability = {

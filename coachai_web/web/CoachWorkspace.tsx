@@ -1,3 +1,4 @@
+import { TrainingProposal } from "./TrainingProposal.js";
 import { apiFetch, type Tab } from "./api.js";
 import React, { useEffect, useRef, useState } from "react";
 import type { Proposal } from "../server/coach/training.js";
@@ -142,9 +143,17 @@ export function CoachWorkspace({
       setBusy(false);
     }
   }
-  async function generate(request: string, regenerate = false) {
+  async function generate(
+    request: string,
+    regenerate = false,
+    intent?: Proposal["decision"]["intent"],
+  ) {
     await perform(async () => {
-      const p = await action("workout", { request, regenerate });
+      const p = await action("workout", {
+        request,
+        regenerate,
+        ...(intent ? { intent } : {}),
+      });
       setProposal(p);
     });
   }
@@ -164,75 +173,113 @@ export function CoachWorkspace({
             aria-label="Gestione allenamento"
           >
             <h2>Allenamento</h2>
-            <div className="actions">
-              {[
-                ["allenamento", "Genera"],
-                ["leggero", "Leggero"],
-                ["intenso", "Intenso"],
-                ["ss", "Sweet Spot"],
-                ["vo2max", "VO2max"],
-                ["endurance", "Endurance"],
-                ["forza", "Forza"],
-              ].map(([request, label]) => (
-                <button
-                  type="button"
-                  key={request}
-                  onClick={() => void generate(request)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            <section
+              className="training-mode"
+              aria-label="Modalità Coach automatica"
+            >
+              <h3>Coach · scelta automatica</h3>
+              <p className="muted">
+                Readiness, piano e attività recenti guidano la proposta. Leggero
+                e Intenso sono preferenze, senza bypass.
+              </p>
+              <div
+                className="actions"
+                role="group"
+                aria-label="Preferenze automatiche"
+              >
+                {(
+                  [
+                    ["allenamento", "Genera", "recommended"],
+                    ["leggero", "Leggero", "lighter"],
+                    ["intenso", "Intenso", "harder"],
+                  ] as const
+                ).map(([request, label, preference]) => (
+                  <button
+                    type="button"
+                    key={request}
+                    onClick={() =>
+                      void generate(request, false, {
+                        mode: "automatic",
+                        preference,
+                      })
+                    }
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </section>
+            <section
+              className="training-mode"
+              aria-label="Richiesta manuale esplicita"
+            >
+              <h3>Manuale · scegli la categoria</h3>
+              <p className="muted">
+                La categoria scelta viene rispettata anche oltre il consiglio
+                automatico. Readiness, Confidence e avvisi rimangono visibili.
+              </p>
+              <div
+                className="actions"
+                role="group"
+                aria-label="Categorie manuali"
+              >
+                {(
+                  [
+                    ["tempo", "Tempo", "tempo"],
+                    ["ss", "Sweet Spot", "sweet_spot"],
+                    ["soglia", "Soglia", "threshold"],
+                    ["vo2max", "VO2max", "vo2max"],
+                    ["endurance", "Endurance", "endurance"],
+                    ["forza", "Forza", "strength"],
+                    ["recupero", "Recupero", "recovery"],
+                    ["riposo", "Riposo", "rest"],
+                  ] as const
+                ).map(([request, label, category]) => (
+                  <button
+                    type="button"
+                    key={request}
+                    onClick={() =>
+                      void generate(request, false, {
+                        mode: "manual",
+                        category,
+                      })
+                    }
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </section>
             {proposal && (
-              <article>
-                <h4>{proposal.proposal.workout.name}</h4>
-                <p>
-                  {proposal.proposal.requestSatisfied
-                    ? "Richiesta soddisfatta"
-                    : "Proposta alternativa: richiesta limitata"}{" "}
-                  · {proposal.proposal.duration} min ·{" "}
-                  {proposal.proposal.recommendation}
-                </p>
-                <ul>
-                  {[
-                    ...new Set(
-                      proposal.proposal.limitingFactors.map((c) => c.text),
-                    ),
-                  ].map((t) => (
-                    <li key={t}>{t}</li>
-                  ))}
-                </ul>
-                <pre className="workout-structure">
-                  {proposal.proposal.workout.structure}
-                </pre>
-                <button
-                  type="button"
-                  onClick={() =>
-                    void generate(proposal.proposal.requestCommand, true)
-                  }
-                >
-                  Rigenera
-                </button>{" "}
-                <button
-                  type="button"
-                  onClick={() =>
-                    void perform(async () => {
-                      await action("select-workout", { id: proposal.id });
-                      setMessage(
-                        "Allenamento selezionato localmente. Nessun caricamento su Intervals.",
-                      );
-                    })
-                  }
-                >
-                  {state.selected === proposal.id ? "Selezionato" : "Seleziona"}
-                </button>
-                <details>
-                  <summary>Spiegazione tecnica completa</summary>
-                  <pre>
-                    {JSON.stringify(proposal.proposal.constraints, null, 2)}
-                  </pre>
-                </details>
-              </article>
+              <TrainingProposal
+                proposal={proposal.proposal}
+                selected={state.selected === proposal.id}
+                onRegenerate={() =>
+                  void generate(
+                    proposal.proposal.requestCommand,
+                    true,
+                    proposal.proposal.decision?.intent,
+                  )
+                }
+                onSelect={() =>
+                  void perform(async () => {
+                    const selected = await action("select-workout", {
+                      id: proposal.id,
+                    });
+                    if (selected.decision)
+                      setProposal({
+                        ...proposal,
+                        proposal: {
+                          ...proposal.proposal,
+                          decision: selected.decision,
+                        },
+                      });
+                    setMessage(
+                      "Allenamento selezionato localmente. Nessun caricamento su Intervals.",
+                    );
+                  })
+                }
+              />
             )}
             <h3>Feedback della seduta</h3>
             <p className="muted">

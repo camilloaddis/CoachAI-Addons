@@ -1,3 +1,4 @@
+import { sleepDuration } from "./physiology.js";
 import { safeRaw } from "./diagnostics.js";
 import { telemetry, compareActivities } from "./telemetry.js";
 import type { DatabaseSync } from "node:sqlite";
@@ -31,7 +32,7 @@ export function normalizeWellness(
       date,
       acquiredAt,
       diagnosticRaw: Object.fromEntries(
-        ["ctl", "atl", "hrv", "restingHR", "sleepScore"].map((k) => [
+        ["ctl", "atl", "hrv", "restingHR", "sleepScore", "sleepSecs"].map((k) => [
           k,
           safeRaw(r[k]),
         ]),
@@ -44,12 +45,13 @@ export function normalizeWellness(
             ["hrv", 1, Infinity],
             ["restingHR", 1, 250],
             ["sleepScore", 0, 100],
+            ["sleepSecs", 1, 86400],
           ] as const
         ).map(([k, min, max]) => [
           k,
           r[k] == null
             ? "missing"
-            : number(r[k], min, max) === null
+            : (k === "sleepSecs" ? sleepDuration(r[k]) : number(r[k], min, max)) === null
               ? "invalid"
               : "present",
         ]),
@@ -59,6 +61,7 @@ export function normalizeWellness(
       hrv: number(r.hrv, 1),
       restingHR: number(r.restingHR, 1, 250),
       sleepScore: number(r.sleepScore, 0, 100),
+      sleepSecs: sleepDuration(r.sleepSecs),
     });
   }
   return [...unique.values()];

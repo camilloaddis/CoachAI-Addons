@@ -1,3 +1,4 @@
+import { sleepDuration } from "./physiology.js";
 import {
   feedbackTimestamp,
   number,
@@ -10,7 +11,8 @@ const definitions = [
   ["atl", "ATL", 0, Infinity],
   ["hrv", "HRV", 1, Infinity],
   ["restingHR", "FC a riposo", 1, 250],
-  ["sleepScore", "Sonno", 0, 100],
+  ["sleepScore", "Qualità sonno", 0, 100],
+  ["sleepSecs", "Durata sonno (secondi)", 1, 86400],
 ] as const;
 export type MetricDiagnostic = {
   scoreEligible?: boolean;
@@ -44,7 +46,11 @@ export function wellnessDiagnostics(
 ): MetricDiagnostic[] {
   const current = wellness.find((w) => w.date === date);
   return definitions.map(([key, label, min, max]) => {
-    const normalized = number(current?.[key], min, max);
+    const valid = (value: unknown) =>
+      key === "sleepSecs"
+        ? sleepDuration(value)
+        : number(value, min, max);
+    const normalized = valid(current?.[key]);
     const rawKnown = Boolean(
       current?.diagnosticRaw && Object.hasOwn(current.diagnosticRaw, key),
     );
@@ -55,7 +61,7 @@ export function wellnessDiagnostics(
           validDate(w.date) &&
           w.date < date &&
           w.date >= shift(date, -28) &&
-          number(w[key], min, max) !== null,
+          valid(w[key]) !== null,
       )
       .sort((a, b) => b.date.localeCompare(a.date))[0];
     const invalid = Boolean(
@@ -85,7 +91,7 @@ export function wellnessDiagnostics(
       fallback:
         normalized === null && fallback
           ? {
-              value: number(fallback[key], min, max)!,
+              value: valid(fallback[key])!,
               date: fallback.date,
               use: "display_only",
             }

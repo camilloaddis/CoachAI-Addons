@@ -1,3 +1,6 @@
+import { categoryLevel, categoryLabels, validateIntent } from "./intent.js";
+import { planAutomatic, recommendations } from "./planner.js";
+import { physiologicalAvailability } from "../readiness/physiology.js";
 import { readSnapshot } from "../readiness/sources.js";
 import { assessIntensity } from "../readiness/intensity.js";
 import type { DatabaseSync } from "node:sqlite";
@@ -8,6 +11,9 @@ import {
   shift,
   type Result,
   type Constraint,
+  type TrainingIntent,
+  type Factor,
+  type Recommendation,
 } from "../readiness/types.js";
 import { ProviderError } from "./http.js";
 export function trainingConfig(db: DatabaseSync) {
@@ -106,47 +112,66 @@ export function peakPower(structure: string) {
   ]);
   return Math.max(0, ...values);
 }
+export type WorkoutSelection = {
+  decision: {
+    intent: TrainingIntent;
+    automaticRecommendation: Recommendation;
+    exceedsRecommendation: boolean;
+    warnings: Factor[];
+    advisoryConstraints: Constraint[];
+  };
+  workout: { name: string; structure: string; difficulty: number };
+  requestCommand: string;
+  requestSatisfied: boolean;
+  requested: Recommendation;
+  constraints: Constraint[];
+  limitingFactors: Constraint[];
+  duration: number;
+  config: ReturnType<typeof trainingConfig>;
+  week: number | null;
+  phase: string;
+  recommendation: Recommendation;
+  readiness: number | null;
+  confidence: number;
+  reasons: string[];
+  metrics: { ctl: number | null; atl: number | null; tsb: number | null };
+  date: string;
+};
 export function selectWorkout(
   db: DatabaseSync,
   result: Result,
   now: Date,
   request = "allenamento",
   regenerate = false,
-) {
+  intent: TrainingIntent = { mode: "automatic", preference: request === "leggero" ? "lighter" : request === "intenso" ? "harder" : "recommended" },
+): WorkoutSelection {
+  intent = validateIntent(intent);
+  const manual = intent.mode === "manual";
+  if (intent.mode === "automatic" && intent.preference !== "recommended")
+    request = intent.preference === "lighter" ? "leggero" : "intenso";
   const config = trainingConfig(db),
     date = today(now);
-  const week =
-    config.start && config.start <= date
-      ? Math.min(
-          config.weeks,
-          Math.floor(
-            (Date.parse(date) - Date.parse(config.start)) / 604800000,
-          ) + 1,
-        )
-      : null;
-  const progress = week === null ? null : (week - 1) / (config.weeks - 1),
-    phase =
-      progress === null
-        ? "non determinabile: configurare start_date"
-        : progress < 0.25
-          ? "base"
-          : progress < 0.5
-            ? "costruzione"
-            : progress < 0.75
-              ? "specifica"
-              : week === config.weeks
-                ? "scarico"
-                : "picco";
-  const rank = [
-    "riposo",
-    "recupero",
-    "endurance",
-    "tempo",
-    "sweet spot/soglia",
-    "VO2max",
-  ];
-  let level = rank.indexOf(result.recommendation);
-  const constraints: Constraint[] = (result.constraints ?? []).map((c) => ({
+  const historical = readSnapshot(db, date, now).activities.map(assessIntensity);
+  const load48 = db.prepare(
+    "SELECT SUM(training_load) total FROM training_activities WHERE activity_date BETWEEN ? AND ?",
+  ).get(shift(date, -1), date)?.total;
+  const plan = planAutomatic({
+    date, score: result.score,
+    assessments: result.metrics.intensityAssessments,
+    context: result.planningContext ?? {
+      wellnessAvailable: result.score !== null,
+      wellnessComplete: !result.constraints.some(c => c.code === "wellness_incomplete"),
+      historyComplete: !result.constraints.some(c => c.code === "history_incomplete"),
+      missingActivityLoad: result.constraints.some(c => c.code === "activity_load_missing"),
+    },
+    config, historical,
+    physiologyReasons: result.physiology?.adjustments.filter(a => a.applied).map(a => a.reason),
+    load48: typeof load48 === "number" ? load48 : null,
+  });
+  const { week, phase } = plan;
+  const rank = recommendations;
+  let level = intent.mode === "manual" ? categoryLevel[intent.category] : rank.indexOf(plan.recommendation);
+  const constraints: Constraint[] = (manual ? [] : plan.constraints).map((c) => ({
     ...c,
   }));
   function limit(
@@ -176,88 +201,7 @@ export function selectWorkout(
       source: "training",
     });
   }
-  if (result.score === null || result.confidence < 75)
-    limit(
-      "training_confidence",
-      "data",
-      "missing",
-      2,
-      "Score assente o confidence sotto 75: massimo endurance.",
-    );
-  if (week === null)
-    limit(
-      "plan_start_unknown",
-      "plan",
-      "missing",
-      2,
-      "Inizio piano non configurato: massimo endurance.",
-    );
-  if (phase === "scarico")
-    limit("taper", "plan", "policy", 2, "Fase scarico: massimo endurance.");
-  if (phase === "base" || phase === "costruzione")
-    limit(
-      "early_phase",
-      "plan",
-      "policy",
-      4,
-      "Base/costruzione: massimo Sweet Spot/soglia.",
-    );
-  const recent = result.metrics.intensityAssessments.filter(
-    (a) =>
-      a.date >= shift(date, -2) &&
-      a.isHard !== false &&
-      a.status !== "non_determinabile",
-  );
-  if (recent.length)
-    limit(
-      "training_recent_intensity",
-      "activity",
-      recent.some((a) => a.evidence !== "measured") ? "inferred" : "measured",
-      2,
-      "Intensità confermata/probabile oggi o nei due giorni precedenti: massimo endurance.",
-    );
-  const high = result.metrics.intensityAssessments.some(
-    (a) => a.date >= shift(date, -3) && a.highIntensity === true,
-  );
-  if (high)
-    limit(
-      "high_intensity_72h",
-      "activity",
-      "inferred",
-      4,
-      "Stimolo alta intensità oggi o nei tre giorni precedenti: evitare VO2max.",
-    );
-  const load48 = db
-    .prepare(
-      "SELECT COUNT(*) n,SUM(training_load) total FROM training_activities WHERE activity_date BETWEEN ? AND ?",
-    )
-    .get(shift(date, -1), date)!;
-  if (Number(load48.total) >= 95)
-    limit(
-      "load48_high",
-      "load",
-      "measured",
-      2,
-      "Carico osservato oggi/ieri ≥95: massimo endurance.",
-    );
-  const names = readSnapshot(db, date, now)
-    .activities.filter(
-      (a) => a.date >= shift(date, -10) && assessIntensity(a).isHard !== false,
-    )
-    .map((a) => a.name ?? "");
-  if (
-    level >= 4 &&
-    names.filter((n) => /sweet spot|threshold|soglia/i.test(n)).length >= 2 &&
-    !names.some((n) => /tempo|sfr/i.test(n))
-  )
-    limit(
-      "quality_rotation",
-      "plan",
-      "inferred",
-      3,
-      "Due nomi di sedute SS/soglia in dieci giorni: rotazione prudenziale verso tempo/forza (esecuzione non confermata dal nome).",
-    );
-  if (request === "leggero")
+  if (!manual && request === "leggero")
     limit(
       "lighter_request",
       "request",
@@ -265,7 +209,7 @@ export function selectWorkout(
       2,
       "Richiesta leggero: massimo endurance.",
     );
-  const requested =
+  const requested = intent.mode === "manual" ? categoryLevel[intent.category] :
     request === "leggero"
       ? 2
       : /vo2/i.test(request)
@@ -280,20 +224,8 @@ export function selectWorkout(
                 ? 2
                 : request === "intenso"
                   ? 5
-                  : result.score === null
-                    ? 1
-                    : result.score < 35
-                      ? 0
-                      : result.score < 50
-                        ? 1
-                        : result.score < 65
-                          ? 2
-                          : result.score < 75
-                            ? 3
-                            : result.score < 85
-                              ? 4
-                              : 5;
-  limit(
+                  : (physiologicalAvailability(result.score) ?? 1);
+  if (!manual) limit(
     "request_ceiling",
     "request",
     "policy",
@@ -315,10 +247,18 @@ export function selectWorkout(
       : w.difficulty > 0 &&
         templateDuration(w.structure) <= config.duration &&
         peakPower(w.structure) <= ceiling &&
-        (phase !== "base" || w.difficulty <= 2),
+        (manual || phase !== "base" || w.difficulty <= 2),
   );
-  const preferred = (w: (typeof catalog)[number]) =>
-    level === 1
+  const preferred = (w: (typeof catalog)[number]) => {
+    if (intent.mode === "manual") {
+      const patterns = {
+        rest: /^Riposo/, recovery: /^Recovery/, endurance: /^Endurance/,
+        tempo: /^Tempo/, sweet_spot: /^Sweet Spot/, threshold: /^Threshold(?!.*SFR)/,
+        vo2max: /^VO2Max/, strength: /^Threshold & SFR/,
+      };
+      return patterns[intent.category].test(w.name);
+    }
+    return level === 1
       ? /^Recovery/.test(w.name)
       : level === 2
         ? /^Endurance/.test(w.name)
@@ -329,8 +269,9 @@ export function selectWorkout(
           : level === 4
             ? /^(Sweet Spot|Threshold)/.test(w.name)
             : /^VO2Max/.test(w.name);
+  };
   const matching = candidates.filter(preferred);
-  if (matching.length) candidates = matching;
+  if (matching.length || manual) candidates = matching;
   const histories = db
     .prepare(
       "SELECT payload,created_at FROM workout_proposals WHERE created_at>=? ORDER BY created_at DESC",
@@ -364,7 +305,7 @@ export function selectWorkout(
         Math.abs(templateDuration(b.structure) - targetDuration) ||
       a.name.localeCompare(b.name),
   );
-  if (level > 2 && !matching.length) {
+  if (!manual && level > 2 && !matching.length) {
     limit(
       "catalog_unavailable",
       "plan",
@@ -379,17 +320,49 @@ export function selectWorkout(
         peakPower(w.structure) <= 75,
     );
   }
-  for (const c of constraints) c.blocksRequested = c.ceiling < requested;
-  const workout = candidates[0] || {
+  for (const c of constraints)
+    c.blocksRequested = request !== "leggero" && c.ceiling === level && c.ceiling < requested;
+  const manualFallback = intent.mode === "manual" ? {
+    name: `${categoryLabels[intent.category]} — proposta breve manuale`,
+    difficulty: intent.category === "rest" ? 0 : 1,
+    structure: intent.category === "rest" ? "- Rest 1d" : intent.category === "vo2max"
+      ? "- Warm up 3m 50-65% power=3s\n\n3x\n- 1m 115% power=3s\n- 2m 50-55% power=3s\n\n- Cooldown 3m 50-45% power=3s"
+      : `- Warm up 3m 45-55% power=3s\n- ${config.duration - 6}m ${{ recovery: "45-55", endurance: "60-70", tempo: "76-85", sweet_spot: "88-94", threshold: "95-100", strength: "75-85" }[intent.category]}% ${intent.category === "strength" ? "50-60rpm " : ""}power=3s\n- Cooldown 3m 50-45% power=3s`,
+  } : null;
+  const workout = candidates[0] || manualFallback || {
     name:
       level <= 1 ? "Recupero breve controllato" : "Endurance breve controllata",
     structure: `- ${config.duration}m ${level <= 1 ? "45-55" : "55-65"}% power=3s`,
     difficulty: 1,
   };
+  // Compare against the complete automatic selection, including catalog and
+  // duration fallbacks. Reuse the same code; the automatic call never recurses.
+  const automatic: { recommendation: Recommendation; constraints: Constraint[] } | null = manual ? selectWorkout(db, result, now, "allenamento", false,
+    { mode: "automatic", preference: "recommended" }) : null;
+  const automaticRecommendation = automatic?.recommendation ?? rank[level];
+  const advisoryConstraints = automatic?.constraints ?? plan.constraints;
+  const recommendedLevel = rank.indexOf(automaticRecommendation);
+  const warnings: Factor[] = manual ? [
+    ...result.factors.filter(f => (f.polarity === "negative" || f.polarity === "uncertain") &&
+      (f.category !== "feedback" || ["legs_current", "negative_legs", "conflicting_feedback"].includes(f.code))),
+    ...advisoryConstraints.filter(c => c.ceiling < requested && c.code !== "request_ceiling"),
+    ...(requested > recommendedLevel ? [{
+      code: "manual_exceeds_recommendation", category: "request" as const,
+      polarity: "negative" as const, evidence: "policy" as const,
+      text: `Richiesta manuale ${intent.mode === "manual" ? categoryLabels[intent.category] : ""} superiore al consiglio automatico ${automaticRecommendation}. Readiness ${result.score ?? "non valutabile"}/100, Confidence ${result.confidence}/100: recupero e carico richiedono attenzione.`,
+    }] : []),
+  ] : [];
   return {
+    decision: {
+      intent,
+      automaticRecommendation,
+      exceedsRecommendation: manual && requested > recommendedLevel,
+      warnings: [...new Map(warnings.map(w => [w.code, w])).values()],
+      advisoryConstraints: manual ? advisoryConstraints : [],
+    },
     workout,
     requestCommand: request,
-    requestSatisfied:
+    requestSatisfied: manual ? true :
       request === "leggero"
         ? level <= 2
         : ["allenamento", "pianifica"].includes(request)
@@ -405,7 +378,7 @@ export function selectWorkout(
     recommendation: rank[level],
     readiness: result.score,
     confidence: result.confidence,
-    reasons: result.reasons,
+    reasons: [...new Set([...result.factors.filter(f => !result.constraints.some(c => c.code === f.code)).map(f => f.text), ...plan.reasons.map(f => f.text)])],
     metrics: {
       ctl: result.metrics.ctl,
       atl: result.metrics.atl,

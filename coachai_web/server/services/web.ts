@@ -1,3 +1,4 @@
+import { intentForRequest, validateIntent } from "../coach/intent.js";
 import type { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { transaction, diagnostic } from "../storage/database.js";
@@ -83,6 +84,7 @@ export function webServices(
           "vo2max",
           "endurance",
           "forza",
+          "tempo", "soglia", "recupero", "riposo",
         ];
         if (
           typeof body.request !== "string" ||
@@ -91,15 +93,32 @@ export function webServices(
             typeof body.regenerate !== "boolean")
         )
           fail();
+        let intent;
+        try { intent = body.intent === undefined ? intentForRequest(body.request as string) : validateIntent(body.intent); }
+        catch { fail(); }
+        const command = body.intent !== undefined && intent?.mode === "automatic"
+          ? { recommended: "allenamento", lighter: "leggero", harder: "intenso" }[intent.preference]
+          : body.request as string;
         prepared = selectWorkout(
           db,
           await readiness(),
           clock(),
-          body.request as string,
+          command,
           body.regenerate === true,
+          intent,
         );
       } else if (action === "select-workout") {
-        prepared = selectWorkout(db, await readiness(), clock());
+        if (typeof body.id !== "string") fail();
+        const payload = db.prepare("SELECT payload FROM workout_proposals WHERE id=?").get(body.id as string)?.payload;
+        if (typeof payload !== "string") fail();
+        const stored = JSON.parse(payload as string);
+        let intent;
+        try { intent = stored.decision ? validateIntent(stored.decision.intent) : undefined; }
+        catch { throw new ValidationError("stale_proposal"); }
+        prepared = {
+          payload,
+          fresh: selectWorkout(db, await readiness(), clock(), stored.requestCommand ?? "allenamento", false, intent),
+        };
       } else if (action === "nutrition-preview") {
         if (
           typeof body.text !== "string" ||
@@ -134,7 +153,10 @@ export function webServices(
                 .get(body.id as string)!.payload,
             ),
           );
-          const fresh = prepared as ReturnType<typeof selectWorkout>;
+          const selection = prepared as { payload: string; fresh: ReturnType<typeof selectWorkout> };
+          const fresh = selection.fresh;
+          if (JSON.stringify(stored) !== JSON.stringify(JSON.parse(selection.payload)))
+            throw new ValidationError("stale_proposal");
           const ranks = [
             "riposo",
             "recupero",
@@ -156,7 +178,7 @@ export function webServices(
           db.prepare(
             "INSERT INTO app_state VALUES('web_selected_workout',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
           ).run(body.id as string);
-          result = { saved: true, id: body.id, uploaded: false };
+          result = { saved: true, id: body.id, uploaded: false, decision: fresh.decision };
         } else if (action === "meal" || action === "edit-meal") {
           let previous: Record<string, unknown> | undefined;
           if (action === "edit-meal") {
