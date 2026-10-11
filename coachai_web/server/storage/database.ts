@@ -55,6 +55,7 @@ const migrations = [
   "003_telegram_envelopes.sql",
   "004_feedback_context_edits.sql",
   "005_web_recovery.sql",
+  "006_workout_library.sql",
 ];
 export function openStore(
   path: string,

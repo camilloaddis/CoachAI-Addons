@@ -1,3 +1,6 @@
+import { backupBefore006 } from "./storage/upgrade-backup.js";
+import { workoutLibrarySync } from "./coach/workout-library-sync.js";
+import { LibraryError } from "./coach/workout-library-client.js";
 import { wellnessDiagnostics, derivedMetric } from "./readiness/diagnostics.js";
 import { telemetryDiagnostics } from "./coach/telemetry-diagnostics.js";
 import { telemetry, compareActivities } from "./readiness/telemetry.js";
@@ -53,6 +56,7 @@ export async function createApp(
       ? (process.env.COACHAI_APP_DB ?? "/data/coachai.db")
       : options.appDbPath;
   if (appDbPath) separatePaths(appDbPath, snapshotPath);
+  if (appDbPath) await backupBefore006(appDbPath);
   const store = appDbPath ? openStore(appDbPath) : null;
   if (
     runtime.dataSource === "local" &&
@@ -220,6 +224,7 @@ export async function createApp(
         options.clock,
       )
     : null;
+  const library = store ? workoutLibrarySync(store, { ...intervalSettings, enabled: runtime.intervalsLibrarySyncEnabled }, options.fetcher, options.clock) : null;
   const web = store
     ? webServices(
         store,
@@ -240,6 +245,12 @@ export async function createApp(
       !safeIngressWrite(request)
     )
       return reply.code(403).send({ error: "same_origin_request_required" });
+  });
+  app.get("/api/workout-library/status", async () => library?.status() ?? { error: "database_unavailable" });
+  app.post("/api/workout-library/sync", async (_request, reply) => {
+    if (!library) return reply.code(503).send({ error: "database_unavailable" });
+    try { return await library.syncOnce(); }
+    catch (error) { return reply.code(error instanceof LibraryError && error.code === "busy" ? 409 : 503).send({ error: error instanceof LibraryError ? error.code : "library_sync_failed" }); }
   });
   app.get("/api/access", async (request) => ({
     method: accessMethod(request, runtime.adminToken),
@@ -466,6 +477,7 @@ export async function createApp(
     sync?.start();
   });
   app.addHook("onClose", async () => {
+    await library?.stop();
     await sync?.stop();
     store?.close();
     db?.close();
@@ -484,7 +496,7 @@ export async function createApp(
     intervalsWriteEnabled: false,
     database: existsSync(dbPath),
     ...snapshot(),
-    version: "0.9.0",
+    version: "0.9.1",
   }));
   app.get("/api/overview", async () => {
     const availability = {

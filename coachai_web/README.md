@@ -1,40 +1,17 @@
-# Coach AI Web 0.9.0 — Adaptive Training Engine
+# Coach AI Web 0.9.1
 
-Coach web autonomo per allenamento, Readiness e alimentazione.
-Aprire l’interfaccia **da Home Assistant Ingress**: usa la sessione autenticata,
-senza inserimento di token. Pannello amministratori, quattro tab responsive:
-Riepilogo, Allenamento, Alimentazione, Debug.
+Libreria workout Intervals: normalizzatore, cache SQLite (migrazione 006), sincronizzazione manuale GET autenticata. Il catalogo importato non viene ancora usato per generare proposte. Readiness, Confidence, Planner e Rigenera restano invariati.
 
-Accesso diretto 8099: la pagina mostra le istruzioni per Ingress, le API richiedono
-il Bearer `admin_api_token` esistente (minimo 32 caratteri). Nessuna eccezione per
-la LAN. Non inoltrare header Ingress tramite altri proxy né abilitare host_network.
-Tutte le API, comprese letture e diagnostica, sono autenticate; scritture Ingress
-protette anche contro richieste browser cross-site. Non inserire token nel browser.
+La nuova opzione `intervals_library_sync_enabled` è **false** per default. Nessuna nuova scrittura su Intervals. Accesso Home Assistant Ingress oppure autenticazione amministrativa per accesso diretto.
 
-Database `/data/coachai.db`, storico e opzioni rimangono persistenti. SQL001–005
-immutati; nessuna nuova migrazione nell’aggiornamento 0.8.0 → 0.9.0, nessuna nuova
-importazione. Non disinstallare cancellando `/data`. Snapshot `/share` readonly.
-Conservare un backup Home Assistant valido prima di aggiornare.
+## Aggiornamento dalla 0.9.0
 
-Wellness mancante non diventa zero: Readiness completa, provvisoria o non
-valutabile; valori obsoleti sono riferimenti visivi, esclusi dal punteggio.
-Alimentazione e configurazione restano utilizzabili. Form conservati durante
-la navigazione; modifiche non salvate restano soltanto in memoria.
+Prima di aggiornare, creare un backup Home Assistant che includa Coach AI Web e scaricarlo su un altro dispositivo. Annotare la versione 0.9.0 e conservare le opzioni tramite il backup, senza pubblicare token.
 
-Il Riepilogo separa Readiness fisiologica, Confidence (affidabilità senza limiti
-di intensità) e consiglio automatico del Planner. In Allenamento, **Coach** usa
-Readiness, piano e attività recenti; Genera, Leggero e Intenso rimangono automatici.
-**Manuale** rispetta la categoria esplicita, anche oltre il consiglio, conservando
-punteggi e avvisi: Tempo, Sweet Spot, Soglia, VO2max, Endurance, Forza, Recupero,
-Riposo. Rigenera conserva la modalità. La selezione resta locale. I fattori
-incerti non sono presentati come fatica; la spiegazione tecnica conserva la
-catena automatica, consultiva per le richieste manuali. Feedback storico e
-ambiguo non limitano il recupero attuale; il recupero esplicitamente datato sì.
+Al primo avvio 0.9.1, prima di applicare 006, l'app verifica l'integrità del database originale, crea uno snapshot tramite SQLite Online Backup API in `/data/backups/pre-006-*/coachai.db` e ne verifica l'integrità. Il backup è privato e persistente, separato dall'immagine aggiornata. In caso di errore l'avvio si interrompe prima della migrazione e dei worker. Non disinstallare l'add-on: la disinstallazione può cancellare /data.
 
-Credenziali solo opzioni password: intervals_api_key, groq_api_key, admin_api_token.
-Integrazioni esistenti conservate; nuove installazioni Groq, sync e dettagli
-Intervals disabilitati per default. Nessuno stream o scrittura verso Intervals.
-Debug offre proiezioni numeriche sanificate, timestamp disponibili e limiti,
-senza token, nomi/ID attività o payload grezzi completi. L’istante di misurazione
-originale e i grezzi non conservati nelle vecchie cache restano non disponibili.
-Telegram assente; dati storici legacy preservati.
+## Ripristino
+
+Per tornare alla 0.9.0, arrestare Coach AI e ripristinare il backup Home Assistant precedente comprensivo dell'add-on e dei suoi dati/configurazione. Non avviare la vecchia versione sul database già migrato a 006. Le modifiche successive al backup non saranno nel ripristino. Conservare una copia anche dello stato più recente prima di un rollback.
+
+I backup SQLite locali sono una seconda protezione: devono essere recuperati con strumenti amministrativi ad add-on arrestato e verificati prima del ripristino. Non copiare il file SQLite mentre è aperto e non lasciare file WAL/SHM appartenenti al database sostituito. Non cancellare manualmente righe dal registro delle migrazioni.

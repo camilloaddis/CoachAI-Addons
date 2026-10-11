@@ -1,5 +1,5 @@
 name: Coach AI Web
-version: "0.9.0"
+version: "0.9.1"
 slug: coachai_web
 description: "Coach autonomo web: allenamento, recupero e diario alimentare"
 arch:
@@ -26,6 +26,7 @@ options:
   groq_enabled: false
   groq_api_key: ""
   groq_model: "openai/gpt-oss-120b"
+  intervals_library_sync_enabled: false
   intervals_sync_enabled: false
   intervals_details_enabled: false
   intervals_poll_seconds: 900
@@ -38,6 +39,7 @@ schema:
   groq_enabled: bool
   groq_api_key: password
   groq_model: str
+  intervals_library_sync_enabled: bool
   intervals_sync_enabled: bool
   intervals_details_enabled: bool
   intervals_poll_seconds: int(60,86400)
