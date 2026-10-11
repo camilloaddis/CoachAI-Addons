@@ -27,6 +27,19 @@ export type Activity = {
     | null;
 };
 export type Wellness = {
+  acquiredAt?: string | null;
+  diagnosticRaw?: Partial<
+    Record<
+      "ctl" | "atl" | "hrv" | "restingHR" | "sleepScore",
+      number | string | null
+    >
+  >;
+  diagnosticState?: Partial<
+    Record<
+      "ctl" | "atl" | "hrv" | "restingHR" | "sleepScore",
+      "missing" | "invalid" | "present"
+    >
+  >;
   date: string;
   ctl: number | null;
   atl: number | null;
@@ -112,6 +125,8 @@ export type Result = {
   score: number | null;
   confidence: number;
   status: string;
+  completeness: "complete" | "provisional" | "unavailable";
+  metricDiagnostics: import("./diagnostics.js").MetricDiagnostic[];
   assessmentState: "missing_data" | "insufficient_recovery" | "available";
   recommendation: Recommendation;
   factors: Factor[];

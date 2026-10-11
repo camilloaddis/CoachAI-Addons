@@ -1,3 +1,4 @@
+import { wellnessDiagnostics, derivedMetric } from "./diagnostics.js";
 import { assessIntensity } from "./intensity.js";
 import { compareActivities } from "./telemetry.js";
 import {
@@ -61,10 +62,25 @@ export function evaluate(input: Input): Result {
       source: "readiness",
     });
   }
+  const metricDiagnostics = wellnessDiagnostics(input.wellness, date);
   const current = input.wellness.find((w) => w.date === date),
     past = input.wellness.filter(
       (w) => w.date >= shift(date, -28) && w.date < date,
     );
+  const baselineComplete = (["hrv", "restingHR"] as const).every(
+    (key) => past.filter((w) => w[key] !== null && w[key]! > 0).length >= 5,
+  );
+  const wellnessComplete = Boolean(
+    current &&
+      baselineComplete &&
+      [
+        current.ctl,
+        current.atl,
+        current.hrv,
+        current.restingHR,
+        current.sleepScore,
+      ].every((v) => v != null),
+  );
   const ctl = current?.ctl ?? null,
     atl = current?.atl ?? null,
     tsb = ctl !== null && atl !== null ? ctl - atl : null;
@@ -161,11 +177,19 @@ export function evaluate(input: Input): Result {
       values = past
         .map((w) => w[key])
         .filter((v): v is number => v !== null && v > 0);
+    const diagnostic = metricDiagnostics.find((m) => m.key === key)!;
+    diagnostic.scoreEligible =
+      value !== null && value > 0 && values.length >= 5;
+    diagnostic.baseline = { value: null, samples: values.length };
+    if (!diagnostic.scoreEligible)
+      diagnostic.reason +=
+        " Esclusa dal punteggio: valore odierno valido e baseline di almeno cinque giorni entrambi necessari.";
     if (value !== null && value > 0 && values.length >= 5) {
       const mean = values.reduce((s, v) => s + v, 0) / values.length,
         ratio = value / mean,
         bad = inverted ? ratio > 1.1 : ratio < 0.8,
         moderate = inverted ? ratio > 1.05 : ratio < 0.9;
+      diagnostic.baseline.value = mean;
       add(bad ? 30 : moderate ? 60 : 90, 20);
       confidence += 15;
       factor(
@@ -459,6 +483,14 @@ export function evaluate(input: Input): Result {
       "Wellness odierno assente: nessun dato vecchio usato come dato di oggi.",
     );
   }
+  if (current && !wellnessComplete)
+    limit(
+      "wellness_incomplete",
+      "data",
+      "missing",
+      2,
+      "Wellness o baseline di recupero incompleti: massimo endurance, nessuna intensità impegnativa basata su dati insufficienti.",
+    );
   if (!objective || confidence < 40)
     limit(
       "confidence_low",
@@ -545,16 +577,52 @@ export function evaluate(input: Input): Result {
     (c) =>
       c.ceiling < 5 && (c.evidence === "missing" || c.evidence === "inferred"),
   );
+  const completeness =
+    score === null
+      ? "unavailable"
+      : !current ||
+          confidence < 75 ||
+          uncertain ||
+          !baselineComplete ||
+          [
+            current.ctl,
+            current.atl,
+            current.hrv,
+            current.restingHR,
+            current.sleepScore,
+          ].some((v) => v == null)
+        ? "provisional"
+        : "complete";
   return {
     date,
     score,
     confidence,
+    completeness,
     status:
-      score === null
+      completeness === "unavailable"
         ? "non disponibile"
-        : confidence < 75
+        : completeness === "provisional"
           ? "valutazione parziale"
           : "valutazione disponibile",
+    metricDiagnostics: [
+      ...metricDiagnostics.map((m) => ({
+        ...m,
+        scoreEligible:
+          m.key === "ctl" || m.key === "atl"
+            ? tsb !== null
+            : m.key === "sleepScore"
+              ? sleep !== null
+              : m.scoreEligible,
+      })),
+      derivedMetric("tsb", "TSB", "Coach AI: CTL − ATL odierni", tsb, date),
+      derivedMetric(
+        "load7",
+        "Carico 7 giorni",
+        "Carichi attività eseguite, ultimi 7 giorni",
+        load7,
+        date,
+      ),
+    ],
     assessmentState: demonstrated
       ? "insufficient_recovery"
       : score === null || !current || confidence < 40 || uncertain

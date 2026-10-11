@@ -260,7 +260,10 @@ export function intervalsWorker(
       );
       await enrich(rawActivities, date);
       const activities = normalizeActivities([...rawActivities.values()]),
-        wellness = normalizeWellness([...rawWellness.values()]);
+        wellness = normalizeWellness(
+          [...rawWellness.values()],
+          clock().toISOString(),
+        );
       if (
         activities.some((a) => a.date < oldest || a.date > newest) ||
         wellness.some((w) => w.date < oldest || w.date > newest)

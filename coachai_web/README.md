@@ -1,23 +1,30 @@
-# Coach AI Web 0.7.0
+# Coach AI Web 0.8.0
 
-Applicazione web autonoma per allenamento, Readiness, feedback e diario alimentare.
-Telegram rimosso; i dati storici sono preservati. Porta dashboard: 8099.
+Coach web autonomo per allenamento, Readiness e alimentazione.
+Aprire l’interfaccia **da Home Assistant Ingress**: usa la sessione autenticata,
+senza inserimento di token. Pannello amministratori, quattro tab responsive:
+Riepilogo, Allenamento, Alimentazione, Debug.
 
-Database persistente /data/coachai.db; migrazione SQL005 automatica e additiva.
-Non reinstallare cancellando /data. Le installazioni già migrate dalla 0.6.1 non
-richiedono una nuova importazione. Snapshot /share/coachai/cycling_coach.db readonly.
+Accesso diretto 8099: la pagina mostra le istruzioni per Ingress, le API richiedono
+il Bearer `admin_api_token` esistente (minimo 32 caratteri). Nessuna eccezione per
+la LAN. Non inoltrare header Ingress tramite altri proxy né abilitare host_network.
+Tutte le API, comprese letture e diagnostica, sono autenticate; scritture Ingress
+protette anche contro richieste browser cross-site. Non inserire token nel browser.
 
-Le operazioni web richiedono admin_api_token casuale di almeno 32 caratteri.
-Inserirlo nel pannello Coach, usando HTTPS già configurato o rete locale fidata.
-Il token resta in memoria nel browser. Nessun token va pubblicato o condiviso.
+Database `/data/coachai.db`, storico e opzioni rimangono persistenti. SQL001–005
+immutati; nessuna nuova migrazione nell’aggiornamento 0.7.0 → 0.8.0, nessuna nuova
+importazione. Non disinstallare cancellando `/data`. Snapshot `/share` readonly.
+Conservare un backup Home Assistant valido prima di aggiornare.
+
+Wellness mancante non diventa zero: Readiness completa, provvisoria o non
+valutabile; valori obsoleti sono riferimenti visivi, esclusi dal punteggio.
+Alimentazione e configurazione restano utilizzabili. Form conservati durante
+la navigazione; modifiche non salvate restano soltanto in memoria.
+
 Credenziali solo opzioni password: intervals_api_key, groq_api_key, admin_api_token.
-
-Groq, sync Intervals e dettagli selettivi restano disabilitati per default.
-Le impostazioni esistenti restano operative secondo configurazione. I dettagli
-selettivi richiedono intervals_details_enabled; nessuno stream viene scaricato.
-La scrittura su Intervals non è implementata. Selezionare un workout lo salva
-soltanto localmente. Nessun bot, callback o worker Telegram viene avviato.
-
-Prima dell'aggiornamento conservare un backup Home Assistant oppure SQLite Online
-Backup e configurazione sicura. Le migrazioni precedenti e tabelle legacy restano.
-Rollback mediante backup compatibile, non modificando manualmente il ledger SQL.
+Integrazioni esistenti conservate; nuove installazioni Groq, sync e dettagli
+Intervals disabilitati per default. Nessuno stream o scrittura verso Intervals.
+Debug offre proiezioni numeriche sanificate, timestamp disponibili e limiti,
+senza token, nomi/ID attività o payload grezzi completi. L’istante di misurazione
+originale e i grezzi non conservati nelle vecchie cache restano non disponibili.
+Telegram assente; dati storici legacy preservati.

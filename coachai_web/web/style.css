@@ -411,13 +411,137 @@ details ol small {
   padding-top: 1rem;
 }
 
-.coach-workspace { margin-top: 24px; padding: 24px; }
-.coach-fields { border: 0; padding: 0; min-width: 0; }
-.web-form { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin: 16px 0; }
-.web-form label { display: flex; flex-direction: column; gap: 6px; flex: 1 1 180px; }
-.web-form input, .web-form select, .coach-workspace textarea { padding: 10px; border: 1px solid #9ca3af; border-radius: 6px; background: white; color: #15212b; max-width: 100%; }
-.coach-workspace button { margin: 4px; }
-.coach-workspace textarea { width: 100%; min-height: 90px; }
-.coach-workspace pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-.coach-workspace details { margin-top: 20px; }
-@media(max-width:600px) { .coach-workspace { padding: 16px; } .web-form label { flex-basis: 100%; } }
+.coach-workspace {
+  margin-top: 24px;
+  padding: 24px;
+}
+.coach-fields {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.web-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+  margin: 16px 0;
+}
+.web-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 180px;
+}
+.web-form input,
+.web-form select,
+.coach-workspace textarea {
+  padding: 10px;
+  border: 1px solid #9ca3af;
+  border-radius: 6px;
+  background: white;
+  color: #15212b;
+  max-width: 100%;
+}
+.coach-workspace button {
+  margin: 4px;
+}
+.coach-workspace textarea {
+  width: 100%;
+  min-height: 90px;
+}
+.coach-workspace pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.coach-workspace details {
+  margin-top: 20px;
+}
+@media (max-width: 600px) {
+  .coach-workspace {
+    padding: 16px;
+  }
+  .web-form label {
+    flex-basis: 100%;
+  }
+}
+
+/* Four persistent panels: hidden sections remain mounted so forms retain input. */
+[hidden] {
+  display: none !important;
+}
+.tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  padding: 12px 0;
+  background: #10141c;
+}
+.tabs button {
+  min-height: 48px;
+  padding: 10px 6px;
+}
+.tabs button[aria-selected="true"] {
+  background: #b9f46e;
+  color: #1c3012;
+  border-color: #b9f46e;
+}
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  outline: 3px solid #b9f46e;
+  outline-offset: 3px;
+}
+.metric-diagnostics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin: 24px 0;
+}
+.metric-diagnostics p {
+  overflow-wrap: anywhere;
+  font-size: 0.875rem;
+}
+.coach-workspace {
+  margin: 20px 0;
+}
+.coach-fields section {
+  min-width: 0;
+}
+textarea {
+  width: 100%;
+  min-height: 110px;
+  font: inherit;
+  background: #10141c;
+  color: inherit;
+  padding: 12px;
+  border: 1px solid #3b4656;
+  border-radius: 8px;
+}
+pre {
+  overflow: auto;
+  max-width: 100%;
+}
+@media (max-width: 600px) {
+  .tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+  }
+  .tabs button {
+    font-size: 0.8rem;
+  }
+  .metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  header .tag {
+    display: none;
+  }
+  .web-form {
+    grid-template-columns: 1fr;
+  }
+}

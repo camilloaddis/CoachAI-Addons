@@ -32,9 +32,21 @@ export function readinessService(
       } catch {
         /* handled as unavailable snapshot */
       }
-      const local = readSnapshot(db, date, now),
+      const local = readSnapshot(db, date, now);
+      let remote: Awaited<ReturnType<typeof readIntervals>>;
+      try {
         remote =
           cachedRemote?.() ?? (await readIntervals(date, config, fetcher));
+      } catch {
+        remote = {
+          wellness: [],
+          activities: [],
+          historyComplete: false,
+          issues: [
+            "Cache Intervals non valida: esclusa, nessun dato fisiologico sostitutivo.",
+          ],
+        };
+      }
       // Successful remote history is authoritative: no double-counting commuting or rides.
       const activities = remote.historyComplete
         ? remote.activities.map((a) => {

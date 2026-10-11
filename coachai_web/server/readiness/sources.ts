@@ -1,3 +1,4 @@
+import { safeRaw } from "./diagnostics.js";
 import { telemetry, compareActivities } from "./telemetry.js";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -18,13 +19,41 @@ const rows = (value: unknown): Row[] => {
     throw new Error("Invalid response");
   return value as Row[];
 };
-export function normalizeWellness(value: unknown): Wellness[] {
+export function normalizeWellness(
+  value: unknown,
+  acquiredAt: string | null = null,
+): Wellness[] {
   const unique = new Map<string, Wellness>();
   for (const r of rows(value)) {
     const date = String(r.id ?? "").slice(0, 10);
     if (!validDate(date)) throw new Error("Invalid wellness date");
     unique.set(date, {
       date,
+      acquiredAt,
+      diagnosticRaw: Object.fromEntries(
+        ["ctl", "atl", "hrv", "restingHR", "sleepScore"].map((k) => [
+          k,
+          safeRaw(r[k]),
+        ]),
+      ),
+      diagnosticState: Object.fromEntries(
+        (
+          [
+            ["ctl", 0, Infinity],
+            ["atl", 0, Infinity],
+            ["hrv", 1, Infinity],
+            ["restingHR", 1, 250],
+            ["sleepScore", 0, 100],
+          ] as const
+        ).map(([k, min, max]) => [
+          k,
+          r[k] == null
+            ? "missing"
+            : number(r[k], min, max) === null
+              ? "invalid"
+              : "present",
+        ]),
+      ),
       ctl: number(r.ctl),
       atl: number(r.atl),
       hrv: number(r.hrv, 1),
@@ -279,7 +308,9 @@ export async function readIntervals(
     return response.json() as Promise<unknown>;
   };
   const [w, a] = await Promise.allSettled([
-    get("wellness").then(normalizeWellness),
+    get("wellness").then((value) =>
+      normalizeWellness(value, new Date().toISOString()),
+    ),
     get("activities").then(normalizeActivities),
   ]);
   const issues: string[] = [];

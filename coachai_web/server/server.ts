@@ -1,3 +1,4 @@
+import { wellnessDiagnostics, derivedMetric } from "./readiness/diagnostics.js";
 import { telemetryDiagnostics } from "./coach/telemetry-diagnostics.js";
 import { telemetry, compareActivities } from "./readiness/telemetry.js";
 import { selectWorkout } from "./coach/training.js";
@@ -7,18 +8,24 @@ import { ProviderError } from "./coach/http.js";
 import { ValidationError } from "./services/records.js";
 import { intervalsWorker } from "./coach/intervals.js";
 import { normalizeActivities } from "./readiness/sources.js";
-import { today, shift, type Wellness } from "./readiness/types.js";
+import {
+  today,
+  shift,
+  feedbackTimestamp,
+  validDate,
+  type Wellness,
+} from "./readiness/types.js";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, statSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { readinessService } from "./readiness/service.js";
 import { historyStore } from "./history.js";
 import { openStore, separatePaths } from "./storage/database.js";
 import { runtimeConfig, type RuntimeConfig } from "./config.js";
-import { timingSafeEqual } from "node:crypto";
+import { accessMethod, safeIngressWrite } from "./auth.js";
 import { intervalsConfig } from "./readiness/config.js";
 
 export async function createApp(
@@ -183,6 +190,16 @@ export async function createApp(
     const result = await calculate();
     if (runtime.dataSource === "local" && store)
       result.profile.ftp = trainingConfig(store).ftp;
+    result.metricDiagnostics = [
+      ...result.metricDiagnostics.filter((m) => m.key !== "ftp"),
+      derivedMetric(
+        "ftp",
+        "FTP operativa",
+        "Configurazione Coach",
+        result.profile.ftp,
+        null,
+      ),
+    ];
     if (
       result !== recorded &&
       history.record(result, options.clock?.() ?? new Date())
@@ -212,23 +229,23 @@ export async function createApp(
         options.clock,
       )
     : null;
-  function authenticated(authorization?: string) {
-    const token = runtime.adminToken;
-    const supplied = authorization?.startsWith("Bearer ")
-      ? authorization.slice(7)
-      : "";
-    const left = Buffer.from(token),
-      right = Buffer.from(supplied);
-    return (
-      token.length >= 32 &&
-      left.length === right.length &&
-      timingSafeEqual(left, right)
-    );
-  }
+  app.addHook("onRequest", async (request, reply) => {
+    if (!/^\/api(?:\/|\?|$)/.test(request.url)) return;
+    reply.header("Cache-Control", "no-store");
+    const method = accessMethod(request, runtime.adminToken);
+    if (!method) return reply.code(401).send({ error: "unauthorized" });
+    if (
+      method === "ingress" &&
+      !["GET", "HEAD"].includes(request.method) &&
+      !safeIngressWrite(request)
+    )
+      return reply.code(403).send({ error: "same_origin_request_required" });
+  });
+  app.get("/api/access", async (request) => ({
+    method: accessMethod(request, runtime.adminToken),
+  }));
   app.get("/api/coach", async (request, reply) => {
     reply.header("Cache-Control", "no-store");
-    if (!authenticated(request.headers.authorization))
-      return reply.code(401).send({ error: "unauthorized" });
     if (!web) return reply.code(503).send({ error: "database_unavailable" });
     return web.state();
   });
@@ -236,8 +253,6 @@ export async function createApp(
     "/api/coach/:action",
     async (request, reply) => {
       reply.header("Cache-Control", "no-store");
-      if (!authenticated(request.headers.authorization))
-        return reply.code(401).send({ error: "unauthorized" });
       if (!web || runtime.dataSource !== "local")
         return reply.code(409).send({ error: "local_database_required" });
       if (
@@ -284,38 +299,158 @@ export async function createApp(
   }
   app.get("/api/readiness/history", async () => history.read());
   app.get("/api/diagnostics/intervals", async (request, reply) => {
-    const token = runtime.adminToken,
-      supplied = request.headers.authorization?.replace(/^Bearer /, "") ?? "";
-    const left = Buffer.from(token),
-      right = Buffer.from(supplied);
-    if (
-      token.length < 32 ||
-      left.length !== right.length ||
-      !timingSafeEqual(left, right)
-    )
-      return reply.code(401).send({ error: "unauthorized" });
     if (!store) return reply.code(503).send({ error: "database_unavailable" });
     reply.header("Cache-Control", "no-store");
     return telemetryDiagnostics(store, options.clock?.() ?? new Date());
   });
-  app.get("/api/diagnostics", async (request, reply) => {
-    const token = runtime.adminToken,
-      supplied = request.headers.authorization?.replace(/^Bearer /, "") ?? "";
-    const left = Buffer.from(token),
-      right = Buffer.from(supplied);
-    if (
-      token.length < 32 ||
-      left.length !== right.length ||
-      !timingSafeEqual(left, right)
-    )
-      return reply.code(401).send({ error: "Unauthorized" });
+  app.get("/api/diagnostics", async () => {
+    const now = options.clock?.() ?? new Date();
+    const state = (key: string) =>
+      store?.prepare("SELECT value FROM app_state WHERE key=?").get(key)?.value;
+    const lastSyncAt = feedbackTimestamp(
+      state("intervals_synced_at"),
+    ).updatedAt;
+    const age = lastSyncAt ? now.getTime() - Date.parse(lastSyncAt) : NaN;
+    const evaluated = await readiness();
+    // Stale cache may be inspected, but these observations never re-enter scoring.
+    const cachedWellness =
+      store
+        ?.prepare(
+          "SELECT payload FROM wellness_cache WHERE date BETWEEN ? AND ?",
+        )
+        .all(shift(today(now), -28), today(now))
+        .flatMap((row) => {
+          try {
+            const w = JSON.parse(String(row.payload));
+            return w && typeof w === "object" && !Array.isArray(w)
+              ? [w as Wellness]
+              : [];
+          } catch {
+            return [];
+          }
+        }) ?? [];
+    const diagnosticMetrics = evaluated.metricDiagnostics.map((m) => {
+      if (
+        m.normalized !== null ||
+        m.state === "invalid" ||
+        !["ctl", "atl", "hrv", "restingHR", "sleepScore"].includes(m.key)
+      )
+        return m;
+      const reference = wellnessDiagnostics(cachedWellness, today(now)).find(
+        (c) => c.key === m.key,
+      );
+      if (!reference || (reference.normalized === null && !reference.fallback))
+        return m;
+      return {
+        ...reference,
+        normalized: null,
+        state: "stale" as const,
+        scoreEligible: false,
+        fallback:
+          reference.normalized !== null && reference.sourceDate
+            ? {
+                value: reference.normalized,
+                date: reference.sourceDate,
+                use: "display_only" as const,
+              }
+            : reference.fallback,
+        reason:
+          "Cache inammissibile per la valutazione attuale. Valore mostrato solo come riferimento, escluso dalla Readiness.",
+      };
+    });
     return {
+      integrations: {
+        groqEnabled: runtime.groqEnabled ?? false,
+        intervalsSyncEnabled: runtime.intervalsSyncEnabled ?? false,
+        intervalsDetailsEnabled: runtime.intervalsDetailsEnabled ?? false,
+        intervalsWriteEnabled: false,
+      },
+      cache: {
+        lastSyncAt,
+        fresh:
+          Number.isFinite(age) &&
+          age >= 0 &&
+          age < (runtime.intervalsPollSeconds || 900) * 2000,
+        coveredDays:
+          store
+            ?.prepare(
+              "SELECT COUNT(*) n FROM activity_coverage WHERE date BETWEEN ? AND ? AND complete=1",
+            )
+            .get(shift(today(now), -28), today(now))?.n ?? 0,
+        expectedDays: 29,
+        latestWellnessDate: (() => {
+          const date = store
+            ?.prepare("SELECT MAX(date) date FROM wellness_cache WHERE date<=?")
+            .get(today(now))?.date;
+          return typeof date === "string" && validDate(date) ? date : null;
+        })(),
+      },
+      metrics: diagnosticMetrics,
+      normalized: {
+        date: evaluated.date,
+        score: evaluated.score,
+        confidence: evaluated.confidence,
+        completeness: evaluated.completeness,
+        ctl: evaluated.metrics.ctl,
+        atl: evaluated.metrics.atl,
+        tsb: evaluated.metrics.tsb,
+        load7: evaluated.metrics.load7,
+        ftp: evaluated.profile.ftp,
+      },
+      // Closed projection: no activity names, IDs, payloads, feedback notes, or configuration secrets.
+      classification: evaluated.metrics.intensityAssessments.map(
+        (a, index) => ({
+          sample: index + 1,
+          status: a.status,
+          evidence: a.evidence,
+          isHard: a.isHard,
+          sessionType: a.sessionType,
+          measurements: a.measurements,
+        }),
+      ),
+      missing: evaluated.missing,
+      factors: evaluated.factors.filter(
+        (f) => f.category !== "activity" && f.category !== "feedback",
+      ),
+      limits: evaluated.constraints.map((c) => ({
+        code: c.code,
+        category: c.category,
+        evidence: c.evidence,
+        ceiling: c.ceiling,
+        before: c.before,
+        after: c.after,
+        applied: c.applied,
+      })),
       events:
         store
           ?.prepare(
             "SELECT occurred_at,category,code FROM diagnostics ORDER BY id DESC LIMIT 100",
           )
-          .all() ?? [],
+          .all()
+          .map((row) => ({
+            occurred_at: feedbackTimestamp(row.occurred_at).updatedAt,
+            category: [
+              "activity_detected",
+              "feedback_received",
+              "meal_recorded",
+              "error",
+              "import",
+              "current_recovery",
+            ].includes(String(row.category))
+              ? row.category
+              : "legacy",
+            code: [
+              "saved",
+              "recorded",
+              "current_recovery",
+              "intervals_detail_unavailable",
+              "intervals_sync_failed",
+              "final_complete",
+              "preliminary_complete",
+            ].includes(String(row.code))
+              ? row.code
+              : "unrecognized_code_redacted",
+          })) ?? [],
     };
   });
   app.addHook("onReady", async () => {
@@ -340,7 +475,7 @@ export async function createApp(
     intervalsWriteEnabled: false,
     database: existsSync(dbPath),
     ...snapshot(),
-    version: "0.7.0",
+    version: "0.8.0",
   }));
   app.get("/api/overview", async () => {
     const availability = {
@@ -437,6 +572,25 @@ export async function createApp(
       };
     },
   );
+  function indexPage(
+    request: import("fastify").FastifyRequest,
+    reply: import("fastify").FastifyReply,
+  ) {
+    const html = readFileSync(
+      resolve(process.cwd(), "dist/index.html"),
+      "utf8",
+    );
+    const prefix =
+      accessMethod(request, runtime.adminToken) === "ingress"
+        ? String(request.headers["x-ingress-path"]).replace(/\/$/, "")
+        : "";
+    // prefix passed strict auth validation; never reflect untrusted request paths.
+    return reply
+      .type("text/html")
+      .header("Cache-Control", "no-store")
+      .send(html.replace("<head>", `<head><base href="${prefix}/">`));
+  }
+  app.get("/", indexPage);
   await app.register(fastifyStatic, {
     root: resolve(process.cwd(), "dist"),
     prefix: "/",
@@ -444,7 +598,7 @@ export async function createApp(
   app.setNotFoundHandler((request, reply) => {
     if (request.url.startsWith("/api/"))
       return reply.code(404).send({ error: "API endpoint not found" });
-    return reply.sendFile("index.html");
+    return indexPage(request, reply);
   });
   return app;
 }
