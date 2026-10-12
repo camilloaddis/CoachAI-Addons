@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
 export type RuntimeConfig = {
   lanEnabled?: boolean;
+  lanAuthRequired?: boolean;
   lanWebPassword?: string;
   lanWebOrigin?: string;
   groqEnabled?: boolean;
@@ -39,6 +40,7 @@ export function runtimeConfig(
       : env[variable] === "true";
   return {
     lanEnabled: bool("lan_enabled", "COACHAI_LAN_ENABLED"),
+    lanAuthRequired: bool("lan_auth_required", "COACHAI_LAN_AUTH_REQUIRED"),
     lanWebPassword: string("lan_web_password", "COACHAI_LAN_WEB_PASSWORD"),
     lanWebOrigin: string("lan_web_origin", "COACHAI_LAN_WEB_ORIGIN"),
     groqEnabled: bool("groq_enabled", "GROQ_ENABLED"),

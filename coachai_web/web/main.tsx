@@ -147,7 +147,10 @@ function App() {
           setSession(sessionAccess); setLanEnabled(sessionAccess); void refresh();
         } else {
           const config = await apiFetch("/auth/config");
-          if (config.ok) setLanEnabled((await config.json()).lanEnabled === true);
+          if (config.ok) {
+            const access = await config.json();
+            setLanEnabled(access.lanEnabled === true && access.passwordRequired === true);
+          }
         }
       })
       .catch(() => {

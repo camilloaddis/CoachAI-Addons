@@ -1,4 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { RuntimeConfig } from "./config.js";
 import { safeIngressWrite } from "./auth.js";
@@ -11,6 +12,32 @@ const digest = (value: string) => createHash("sha256").update(value).digest();
 // Sessions expire on restart; the configured password is never sent to clients.
 export function lanAccess(app: FastifyInstance, runtime: RuntimeConfig, clock = () => new Date()) {
   const enabled = runtime.lanEnabled === true;
+  if (enabled && runtime.lanAuthRequired !== true) {
+    let origin: URL | null = null;
+    if (runtime.lanWebOrigin) {
+      try {
+        origin = new URL(runtime.lanWebOrigin);
+        if (!["http:", "https:"].includes(origin.protocol) || origin.username || origin.password ||
+            origin.pathname !== "/" || origin.search || origin.hash) throw new Error();
+      } catch { throw new Error("Invalid LAN web origin"); }
+    }
+    const authenticated = (request: FastifyRequest) => {
+      const peer = (request.raw.socket.remoteAddress ?? "").replace(/^::ffff:/i, "").split("%")[0];
+      const parts = peer.split(".").map(Number);
+      const local = isIP(peer) === 4
+        ? parts[0] === 127 || parts[0] === 10 || (parts[0] === 192 && parts[1] === 168) ||
+          (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31)
+        : isIP(peer) === 6 && (peer === "::1" || /^(?:f[cd]|fe[89ab])/i.test(peer));
+      return local && (!origin || request.headers.host === origin.host);
+    };
+    app.get("/auth/config", async (_request, reply) =>
+      reply.header("Cache-Control", "no-store").send({ lanEnabled: true, passwordRequired: false }));
+    app.route({ method: ["POST", "DELETE"], url: "/auth/session",
+      handler: async (_request, reply) => reply.code(404).send({ error: "not_found" }) });
+    return { method: "lan" as const, authenticated, safeWrite: (request: FastifyRequest) =>
+      authenticated(request) && request.headers["sec-fetch-site"] !== "cross-site" &&
+      (!request.headers.origin || request.headers.origin === (origin?.origin ?? `http://${request.headers.host}`)) };
+  }
   let origin: URL | null = null;
   if (enabled) {
     const password = runtime.lanWebPassword ?? "";
@@ -61,7 +88,7 @@ export function lanAccess(app: FastifyInstance, runtime: RuntimeConfig, clock = 
     `${cookieName}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${age}` +
     (origin?.protocol === "https:" ? "; Secure" : "");
   app.get("/auth/config", async (_request, reply) =>
-    reply.header("Cache-Control", "no-store").send({ lanEnabled: enabled }));
+    reply.header("Cache-Control", "no-store").send({ lanEnabled: enabled, passwordRequired: enabled }));
   app.post<{ Body: { password?: unknown } }>("/auth/session", { bodyLimit: 1024 }, async (request, reply) => {
     reply.header("Cache-Control", "no-store");
     if (!enabled) return reply.code(404).send({ error: "not_found" });
@@ -94,5 +121,5 @@ export function lanAccess(app: FastifyInstance, runtime: RuntimeConfig, clock = 
     return reply.header("Set-Cookie", cookie("", 0)).send({ authenticated: false });
   });
   app.addHook("onClose", async () => { sessions.clear(); attempts.clear(); });
-  return { authenticated, safeWrite };
+  return { method: "session" as const, authenticated, safeWrite };
 }

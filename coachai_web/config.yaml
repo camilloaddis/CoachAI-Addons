@@ -1,5 +1,5 @@
 name: Coach AI Web
-version: "1.2.0"
+version: "1.2.1"
 slug: coachai_web
 description: "Coach autonomo web: allenamento, recupero e diario alimentare"
 arch:
@@ -22,6 +22,7 @@ panel_icon: mdi:bike
 
 options:
   lan_enabled: false
+  lan_auth_required: false
   lan_web_password: ""
   lan_web_origin: ""
   intervals_athlete_id: ""
@@ -39,6 +40,7 @@ options:
   data_source: snapshot
 schema:
   lan_enabled: bool
+  lan_auth_required: bool
   lan_web_password: password
   lan_web_origin: str
   intervals_athlete_id: str

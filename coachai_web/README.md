@@ -1,10 +1,21 @@
-# Coach AI Web 1.2.0
+# Coach AI Web 1.2.1
 
 Coach web per Home Assistant OS amd64, Node.js 24, Fastify, React e SQLite.
 
-## Changelog dalla 1.1.0
+## Changelog 1.2.1 dalla 1.2.0
 
-- Accesso LAN opzionale con password dedicata e sessione HttpOnly; Ingress resta supportato sulla stessa installazione e sugli stessi database.
+- LAN senza login quando abilitata: `lan_auth_required: false` predefinito; origine facoltativa. Password/sessioni precedenti restano opt-in con `lan_auth_required: true`.
+- Corretto il 400 `invalid_request` di GENERA al cambio modalità/categoria: nuova generazione per intento diverso, rigenerazione solo per lo stesso intento.
+- Nessuna modifica ad algoritmi, database, migrazioni o dipendenze.
+
+Se nella 1.2.0 era già impostato `lan_enabled: true`, dopo l'aggiornamento
+l'accesso LAN è aperto per default, anche con una vecchia password salvata.
+Per conservare il login impostare esplicitamente `lan_auth_required: true`.
+Con `lan_enabled: false`, Ingress e autenticazione diretta restano invariati.
+
+## Modifiche della 1.2.0 rispetto alla 1.1.0
+
+- Accesso LAN opzionale con password dedicata e sessione HttpOnly nella 1.2.0; Ingress resta supportato sulla stessa installazione e sugli stessi database.
 - Host e porta espliciti per avvio autonomo, API `/api/v1` compatibili con `/api` e health minimale `/healthz`. Porta host disabilitata per default nell'add-on.
 - Navigazione a quattro tab con icone e schede allenamento, selezione automatica/manuale e grafico workout verificato.
 - Tab Pasto riorganizzato in riepilogo giornaliero, registrazione/anteprima e diario per data con modifica/cancellazione dei pasti.
@@ -23,32 +34,28 @@ web o token API. `ingress_port: 8099` resta invariato e funziona anche quando
 il mapping della porta host è disabilitato. Non aggiungere permessi Supervisor,
 `host_network`, modalità privilegiata o accesso in scrittura alla share.
 
-## LAN opzionale sulla stessa installazione
+## LAN opzionale, senza password
 
-1. Scegliere un indirizzo stabile del NUC e una porta host libera.
-2. Impostare `lan_enabled: true` nelle opzioni dell'add-on.
-3. Impostare `lan_web_password` a un segreto casuale di 24–256 caratteri,
-   distinto da `admin_api_token` e dalle chiavi dei provider.
-4. Impostare `lan_web_origin` all'origine esatta della pagina, ad esempio
-   `http://192.168.1.30:8099`, senza path, query o credenziali.
-5. Abilitare volontariamente il mapping host per `8099/tcp` nella sezione rete
-   dell'add-on; il default è disabilitato (`null`). Se cambia la porta host,
-   aggiornare anche `lan_web_origin`. Riavviare l'add-on.
-6. Aprire quella URL e autenticarsi con la password web. Ingress continua a
-   funzionare e utilizza lo stesso database; non avviare una seconda istanza.
+Impostare `lan_enabled: true` e `lan_auth_required: false` (default), abilitare
+la porta host **8099** per `8099/tcp` nella sezione Rete e riavviare.
+CoachAI è raggiungibile su `http://IP-NUC:8099/`, le API su
+`http://IP-NUC:8099/api/v1/...`, senza login o token. Ingress resta disponibile
+tramite HA sulla porta 8123, usando lo stesso backend e database.
 
-Durante un upgrade un mapping impostato in precedenza può rimanere attivo:
-verificarlo esplicitamente. Limitare la porta ai dispositivi della LAN fidata
-con firewall/router. HTTP non cifra password e cookie: su reti condivise usare
-HTTPS tramite proxy locale e un'origine HTTPS. Nessun port forwarding pubblico.
+`lan_web_password` può restare vuota. `lan_web_origin` è facoltativa: vuota
+per accesso semplice, oppure origine esatta come `http://192.168.0.100:8099`
+per vincolare l'host browser. I client locali senza Origin non richiedono
+header browser speciali; validazione, idempotenza e protezione delle scritture
+cross-origin restano attive.
 
-Cookie HttpOnly/SameSite Strict, durata assoluta otto ore, revoca al logout o
-riavvio e limiti ai tentativi. Nessun token amministrativo viene inserito nel
-browser. Le API sensibili richiedono Ingress verificato, sessione valida o
-`Authorization: Bearer ...` con il token amministrativo esistente (almeno 32
-caratteri). Non passare segreti nella URL. Gli header proxy non autenticano.
-`/healthz` è pubblico e mostra solo lo stato HTTP; `/api/v1/health` è diagnostico
-e autenticato. Il servizio non implementa Tunnel o autenticazione Cloudflare.
+L'accesso aperto autorizza tutti i peer socket privati/loopback che raggiungono
+il servizio, senza fiducia negli IP inoltrati. Non esporre questa modalità
+tramite port forwarding o tunnel Internet. Nessun nuovo permesso HA è richiesto.
+Mapping salvati in precedenza possono restare attivi: verificarli dopo upgrade.
+
+Il login precedente resta disponibile se si imposta `lan_auth_required: true`,
+con password casuale 24–256 caratteri e origine esatta. Con LAN disabilitata
+rimangono Bearer e Ingress. `/healthz` è sempre minimale e pubblico.
 
 ## Persistenza e aggiornamento dalla 1.1.0
 
@@ -66,7 +73,7 @@ Fare copie consistenti tramite SQLite Backup API o con servizio fermo; non
 rimuovere WAL, ledger o dati per aggiornare. `data_source: local` richiede
 l'importazione finale già completata e non viene impostato dall'upgrade.
 
-Dopo l'aggiornamento controllare versione 1.2.0, pasti/RPE/allenamenti,
+Dopo l'aggiornamento controllare versione 1.2.1, pasti/RPE/allenamenti,
 configurazione, storico e Ingress. Attivare LAN solo se desiderato. La
 pubblicazione sul calendario resta opt-in tramite
 `intervals_calendar_write_enabled` e richiede conferma di data e allenamento.
@@ -80,7 +87,7 @@ sovrascrivere un database con una copia incoerente.
 Dalla directory applicativa eseguire `npm ci`, `npm run build` e `npm start`
 con Node.js 24. Il default è `127.0.0.1:8099`. Per LAN configurare
 `COACHAI_HOST`, `COACHAI_PORT`, `COACHAI_LAN_ENABLED=true`,
-`COACHAI_LAN_WEB_PASSWORD` e `COACHAI_LAN_WEB_ORIGIN`, oltre ai percorsi
+`COACHAI_LAN_AUTH_REQUIRED=false` e opzionalmente `COACHAI_LAN_WEB_ORIGIN`, oltre ai percorsi
 persistenti `COACHAI_APP_DB`, `COACHAI_HISTORY`, `COACHAI_DB` e alla sorgente
 attuale. Il file opzioni può essere indicato con `COACHAI_OPTIONS_FILE`.
 Host LAN specifico preferibile a tutte le interfacce; segreti in file protetti,

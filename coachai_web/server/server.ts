@@ -62,7 +62,7 @@ export async function createApp(
   const lan = lanAccess(app, runtime, options.clock);
   const requestAccess = (request: import("fastify").FastifyRequest) =>
     accessMethod(request, runtime.adminToken) ??
-    (!request.headers.authorization && lan.authenticated(request) ? "session" : null);
+    (!request.headers.authorization && lan.authenticated(request) ? lan.method : null);
   app.setErrorHandler((error, _request, reply) => {
     const code = error && typeof error === "object" && "statusCode" in error ? error.statusCode : undefined;
     const status = typeof code === "number" && code >= 400 && code < 500 ? code : 500;
@@ -278,7 +278,7 @@ export async function createApp(
     const method = requestAccess(request);
     if (!method) return reply.code(401).send({ error: "unauthorized" });
     if (
-      (method === "ingress" || method === "session") &&
+      (method === "ingress" || method === "session" || method === "lan") &&
       !["GET", "HEAD"].includes(request.method) &&
       !(method === "ingress" ? safeIngressWrite(request) : lan.safeWrite(request))
     )

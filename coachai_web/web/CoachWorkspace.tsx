@@ -213,11 +213,16 @@ export function CoachWorkspace({
     intent?: Proposal["decision"]["intent"],
   ) {
     await perform(async () => {
+      const previousIntent = proposal?.proposal.decision?.intent;
+      const regeneratePrevious = regenerate && !!intent && !!previousIntent &&
+        (intent.mode === "manual"
+          ? previousIntent.mode === "manual" && intent.category === previousIntent.category
+          : previousIntent.mode === "automatic" && intent.preference === previousIntent.preference);
       const p = await action("workout", {
         request,
-        regenerate,
+        regenerate: regeneratePrevious,
         ...(intent ? { intent } : {}),
-        ...(regenerate && proposal ? { previousProposalId: proposal.id } : {}),
+        ...(regeneratePrevious && proposal ? { previousProposalId: proposal.id } : {}),
       });
       setProposal(p);
     });
