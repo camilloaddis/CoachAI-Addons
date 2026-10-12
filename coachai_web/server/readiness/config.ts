@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 // Never log this object or include credentials in API responses.
 export function intervalsConfig(
   env: NodeJS.ProcessEnv = process.env,
-  path = "/data/options.json",
+  path = env.COACHAI_OPTIONS_FILE ?? "/data/options.json",
 ): { key?: string; athlete?: string } {
   let options: Record<string, unknown> = {};
   if (existsSync(path)) {

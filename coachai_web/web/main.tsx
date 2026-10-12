@@ -1,4 +1,5 @@
 import { LibrarySettings } from "./LibrarySettings.js";
+import { LanLogin } from "./LanLogin.js";
 import packageMetadata from "../package.json";
 import { apiFetch, type Tab } from "./api.js";
 import { ReadinessPanel } from "./ReadinessPanel.js";
@@ -79,6 +80,8 @@ const date = (s: string) => {
 function App() {
   const [tab, setTab] = useState<Tab>("today");
   const [authorized, setAuthorized] = useState<boolean | null>(null);
+  const [lanEnabled, setLanEnabled] = useState(false);
+  const [session, setSession] = useState(false);
   const [data, setData] = useState<Overview | null>(null);
   const [dayMeals, setDayMeals] = useState<Meal[]>([]);
   const [error, setError] = useState("");
@@ -117,6 +120,8 @@ function App() {
     }
   };
   useEffect(() => {
+    const unauthorized = () => { setAuthorized(false); setData(null); setDayMeals([]); setSession(false); };
+    window.addEventListener("coachai-unauthorized", unauthorized);
     const romeDay = () =>
       new Intl.DateTimeFormat("en-CA", {
         timeZone: "Europe/Rome",
@@ -135,20 +140,28 @@ function App() {
     const timer = window.setInterval(checkDay, 30000);
     document.addEventListener("visibilitychange", checkDay);
     void apiFetch("/api/access")
-      .then((r) => {
+      .then(async (r) => {
         setAuthorized(r.ok);
-        if (r.ok) void refresh();
+        if (r.ok) {
+          const sessionAccess = (await r.json()).method === "session";
+          setSession(sessionAccess); setLanEnabled(sessionAccess); void refresh();
+        } else {
+          const config = await apiFetch("/auth/config");
+          if (config.ok) setLanEnabled((await config.json()).lanEnabled === true);
+        }
       })
       .catch(() => {
         setAuthorized(false);
       });
     return () => {
       window.clearInterval(timer);
+      window.removeEventListener("coachai-unauthorized", unauthorized);
       document.removeEventListener("visibilitychange", checkDay);
     };
   }, []);
   const tabs: [Tab, string][] = [
-    ["today", "Oggi"],
+    ["today", "Training"],
+    ["meal", "Pasto"],
     ["trends", "Trend"],
     ["settings", "Impostazioni"],
   ];
@@ -158,7 +171,6 @@ function App() {
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
-  const todayMeals = dayMeals;
   const last = data?.daily.find((d) => d.date === nutritionDay);
 
   return (
@@ -166,15 +178,32 @@ function App() {
       <header>
         <div className="brand">
           <span className="brandmark">C</span>
-          <div>
-            <strong>Coach AI</strong>
-            <small>Performance & Nutrition</small>
-          </div>
         </div>
-        <span className="tag">Il tuo coach quotidiano</span>
+        {authorized === true && (
+          <div className="header-actions">
+          {session && <button onClick={async () => {
+            try {
+              const response = await apiFetch("/auth/session", { method: "DELETE" });
+              if (!response.ok) throw new Error();
+              setAuthorized(false); setSession(false); setData(null); setDayMeals([]); setTab("today");
+            } catch { setError("Disconnessione non riuscita. Riprova."); }
+          }}>Esci</button>}
+          <button className="reload-button" aria-label={loading ? "Aggiornamento in corso" : "Aggiorna"}
+            title="Aggiorna" disabled={loading} aria-busy={loading} onClick={() => void refresh()}>
+            {/* Lucide: rotate-cw. License: web/lucide-LICENSE.txt. */}
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+              <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+              <path d="M21 3v5h-5" />
+            </svg>
+          </button>
+          </div>
+        )}
       </header>
       <main>
         {authorized !== true ? (
+          authorized === false && lanEnabled ? <LanLogin onLogin={() => {
+            setAuthorized(true); setSession(true); setTab("today"); void refresh();
+          }} /> :
           <section className="panel">
             <h1>
               {authorized === null
@@ -196,8 +225,10 @@ function App() {
                   key={key}
                   id={`tab-${key}`}
                   role="tab"
+                  aria-label={label}
+                  title={label}
                   aria-selected={tab === key}
-                  aria-controls={key === "today" ? "panel-today workspace-training workspace-nutrition" : key === "settings" ? "panel-settings workspace-debug workspace-summary" : "panel-trends workspace-trends"}
+                  aria-controls={key === "today" ? "panel-today workspace-training" : key === "meal" ? "workspace-nutrition" : key === "trends" ? "panel-trends workspace-trends" : "panel-settings workspace-debug workspace-summary"}
                   tabIndex={tab === key ? 0 : -1}
                   onClick={() => setTab(key)}
                   onKeyDown={(e) => {
@@ -218,23 +249,35 @@ function App() {
                     }
                   }}
                 >
-                  {label}
+                  {/* Lucide: bike, utensils, chart-no-axes-column, settings. License: web/lucide-LICENSE.txt. */}
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+                    {key === "today" ? <>
+                      <circle cx="18.5" cy="17.5" r="3.5" />
+                      <circle cx="5.5" cy="17.5" r="3.5" />
+                      <circle cx="15" cy="5" r="1" />
+                      <path d="M12 17.5V14l-3-3 4-3 2 3h2" />
+                    </> : key === "meal" ? <>
+                      <path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2" />
+                      <path d="M7 2v20" />
+                      <path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7" />
+                    </> : key === "settings" ? <>
+              <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" />
+              <circle cx="12" cy="12" r="3" />
+                    </> : <>
+                      <path d="M5 21v-6" />
+                      <path d="M12 21V3" />
+                      <path d="M19 21V9" />
+                    </>}
+                  </svg>
                 </button>
               ))}
             </nav>
-            <div className="heading">
+            {tab === "settings" && <div className="heading">
               <div>
-                <p className="eyebrow">DASHBOARD</p>
-                <h1>{tabs.find(([key]) => key === tab)![1]}</h1>
-                <p className="muted">
-                  Recupero e carico guidano la proposta. I dati mancanti
-                  riducono l’affidabilità.
-                </p>
+                <h1>Impostazioni</h1>
+                <p className="muted">Gestisci la configurazione del coach e delle integrazioni.</p>
               </div>
-              <button onClick={() => void refresh()} disabled={loading}>
-                {loading ? "Caricamento…" : "Aggiorna"}
-              </button>
-            </div>
+            </div>}
             {error && (
               <div className="error" role="alert">
                 {error}
@@ -269,79 +312,7 @@ function App() {
                 prescription={data?.prescription}
               />
             </div>
-            <CoachWorkspace tab={tab} meals={dayMeals} refresh={refresh} />
-            <div hidden={tab !== "today"}>
-              <details><summary>Ultima attività e pasti registrati</summary>
-              <section className="split">
-                <article className="panel">
-                  <div className="panel-title">
-                    <h2>Ultima attività</h2>
-                    <span>Intervals.icu via SQLite</span>
-                  </div>
-                  <div className="entries">
-                    {data?.activities.length ? (
-                      data.activities.slice(0, 1).map((a, i) => (
-                        <div className="entry" key={a.activity_id}>
-                          <div>
-                            <strong>{a.name || "Attività"}</strong>
-                            <small>
-                              {date(a.activity_date)}
-                              {a.startLocal
-                                ? " · " + a.startLocal.slice(11, 16)
-                                : ""}{" "}
-                              · {a.category || "—"}
-                            </small>
-                          </div>
-                          <div className="right">
-                            <strong>{nf(a.duration_min, " min")}</strong>
-                            <small>
-                              {nf(a.training_load, " load")} ·{" "}
-                              {nf(a.avg_power, " W")}
-                            </small>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="muted empty">
-                        Nessuna attività presente nello snapshot.
-                      </p>
-                    )}
-                  </div>
-                </article>
-                <article className="panel">
-                  <div className="panel-title">
-                    <h2>Alimentazione di oggi</h2>
-                    <span>{nutritionDay} · Europe/Rome</span>
-                  </div>
-                  <div className="entries">
-                    {todayMeals.length ? (
-                      todayMeals.map((m, i) => (
-                        <div className="entry" key={i}>
-                          <div>
-                            <strong>{m.meal_type || "Pasto"}</strong>
-                            <small>
-                              {date(m.date)} · {m.description || "—"}
-                            </small>
-                          </div>
-                          <div className="right">
-                            <strong>{nf(m.calories, " kcal")}</strong>
-                            <small>
-                              P {nf(m.protein_g, "g")} · C {nf(m.carbs_g, "g")}{" "}
-                              · F {nf(m.fat_g, "g")}
-                            </small>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="muted empty">
-                        Nessun pasto registrato oggi.
-                      </p>
-                    )}
-                  </div>
-                </article>
-              </section>
-              </details>
-            </div>
+            <CoachWorkspace tab={tab} meals={dayMeals} refresh={refresh} activities={data?.activities ?? []} exerciseKcal={last?.exercise_kcal} />
             <section
               id="panel-trends"
               role="tabpanel"
@@ -420,9 +391,9 @@ function App() {
                     <b>
                       {nf(
                         last?.[dailyKey] ??
-                          (todayMeals.length &&
-                          todayMeals.every((m) => m[mealKey] != null)
-                            ? todayMeals.reduce(
+                          (dayMeals.length &&
+                          dayMeals.every((m) => m[mealKey] != null)
+                            ? dayMeals.reduce(
                                 (sum, m) => sum + m[mealKey]!,
                                 0,
                               )
@@ -435,7 +406,7 @@ function App() {
             </section>
             <section
               id="panel-settings"
-              role="tabpanel"
+              role="region"
               aria-labelledby="tab-settings"
               hidden={tab !== "settings"}
             >

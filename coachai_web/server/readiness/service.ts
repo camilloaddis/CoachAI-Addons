@@ -57,7 +57,8 @@ export function readinessService(
               ...a,
               name: a.name ?? snapshot?.name,
               type: a.type ?? snapshot?.type,
-              rpe: a.rpe ?? snapshot?.rpe,
+              // Successful remote reads are authoritative, including removal.
+              rpe: a.rpe,
             };
           })
         : local.activities;

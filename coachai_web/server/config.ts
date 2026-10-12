@@ -1,5 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
+import { isIP } from "node:net";
 export type RuntimeConfig = {
+  lanEnabled?: boolean;
+  lanWebPassword?: string;
+  lanWebOrigin?: string;
   groqEnabled?: boolean;
   groqKey?: string;
   groqModel?: string;
@@ -14,7 +18,7 @@ export type RuntimeConfig = {
 };
 export function runtimeConfig(
   env: NodeJS.ProcessEnv = process.env,
-  path = "/data/options.json",
+  path = env.COACHAI_OPTIONS_FILE ?? "/data/options.json",
 ): RuntimeConfig {
   let options: Record<string, unknown> = {};
   try {
@@ -34,6 +38,9 @@ export function runtimeConfig(
       ? options[key] === true
       : env[variable] === "true";
   return {
+    lanEnabled: bool("lan_enabled", "COACHAI_LAN_ENABLED"),
+    lanWebPassword: string("lan_web_password", "COACHAI_LAN_WEB_PASSWORD"),
+    lanWebOrigin: string("lan_web_origin", "COACHAI_LAN_WEB_ORIGIN"),
     groqEnabled: bool("groq_enabled", "GROQ_ENABLED"),
     groqKey: string("groq_api_key", "GROQ_API_KEY"),
     groqModel: string("groq_model", "GROQ_MODEL") || "openai/gpt-oss-120b",
@@ -65,4 +72,15 @@ export function runtimeConfig(
         ? "local"
         : "snapshot",
   };
+}
+
+// Binding is independent of authentication. A wide bind must be an explicit
+// operator choice (the HA container sets it for Supervisor Ingress).
+export function listenConfig(env: NodeJS.ProcessEnv = process.env) {
+  const host = env.COACHAI_HOST ?? "127.0.0.1";
+  const rawPort = env.COACHAI_PORT ?? env.PORT ?? "8099";
+  const port = Number(rawPort);
+  if (!isIP(host) || !/^\d+$/.test(rawPort) || !Number.isInteger(port) || port < 1 || port > 65535)
+    throw new Error("Invalid CoachAI listen configuration");
+  return { host, port };
 }

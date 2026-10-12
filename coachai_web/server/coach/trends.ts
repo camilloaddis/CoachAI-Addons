@@ -20,7 +20,7 @@ export function trendReport(db: DatabaseSync, days: 7 | 30, now: Date) {
     const telemetry = rides.map(r => { try { return JSON.parse(String(r.payload)); } catch { return null; } });
     const activityTotal = (key: string) => covered && telemetry.every(r => r && number(r[key]) !== null) ? telemetry.reduce((sum, r) => sum + r[key], 0) : null;
     const weight = number(stored?.weight);
-    return { date, calories: foodTotal('calories'), protein: foodTotal('protein_g'), foodComplete: stored?.food_complete === 1,
+    return { date, calories: foodTotal('calories'), protein: foodTotal('protein_g'), recordedMeals: food.length,
       weight: weight !== null && weight > 0 && weight <= 500 ? weight : null,
       activities: covered ? rides.length : null, recordedActivities: rides.length,
       minutes: activityTotal('moving_time') === null ? null : round(activityTotal('moving_time')! / 60),
@@ -33,18 +33,17 @@ export function trendReport(db: DatabaseSync, days: 7 | 30, now: Date) {
     return { observedDays: values.length, total: values.length ? round(total) : null, average: values.length ? round(total / values.length) : null };
   };
   const metrics = { calories: stats('calories'), protein: stats('protein'), weight: stats('weight'), minutes: stats('minutes'), exerciseKcal: stats('exerciseKcal') };
-  const completeFoodDays = rows.filter(r => r.foodComplete && r.calories !== null).length;
   const weightRows = rows.filter(r => r.weight !== null);
   const weightChange = weightRows.length >= 2 ? round(weightRows.at(-1)!.weight! - weightRows[0].weight!) : null;
   const activityDays = rows.filter(r => r.activities !== null).length;
   const facts = [
-    { id: 'food', text: metrics.calories.average === null ? 'Nessun apporto alimentare registrato nel periodo.' : `Apporto registrato medio: ${metrics.calories.average} kcal su ${metrics.calories.observedDays}/${days} giorni; ${completeFoodDays} diari dichiarati completi. I pasti mancanti possono sottostimare l’apporto.` },
+    { id: 'food', text: metrics.calories.average === null ? 'Nessun apporto alimentare registrato nel periodo.' : `Apporto registrato medio: ${metrics.calories.average} kcal su ${metrics.calories.observedDays}/${days} giorni. I pasti mancanti possono sottostimare l’apporto.` },
     { id: 'protein', text: metrics.protein.average === null ? 'Proteine non disponibili.' : `Proteine registrate: media ${metrics.protein.average} g su ${metrics.protein.observedDays}/${days} giorni, senza dedurre adeguatezza nutrizionale.` },
     { id: 'weight', text: weightChange === null ? `Andamento del peso non determinabile: ${weightRows.length} misure disponibili.` : `Peso: differenza fra prima e ultima misura ${weightChange > 0 ? '+' : ''}${weightChange} kg su ${weightRows.length} misure. Non equivale a una variazione di massa grassa.` },
     { id: 'activity', text: `Attività registrate: ${rows.reduce((n,r) => n + r.recordedActivities,0)}. Copertura sincronizzata ${activityDays}/${days} giorni; durata disponibile ${metrics.minutes.total ?? 'n/d'} minuti, energia delle attività ${metrics.exerciseKcal.total ?? 'n/d'} kcal (${metrics.exerciseKcal.observedDays}/${days} giorni).` },
-    { id: 'balance', text: 'Bilancio energetico non stimabile: manca un dispendio totale giornaliero verificato. Le calorie delle attività non includono metabolismo basale e attività quotidiane; anche i diari chiusi sono stime.' },
+    { id: 'balance', text: 'Bilancio energetico non stimabile: manca un dispendio totale giornaliero verificato. Le calorie delle attività non includono metabolismo basale e attività quotidiane; i valori alimentari registrati possono essere parziali e stimati.' },
   ];
-  return { days, start, end, todayExcluded: true, rows, metrics, completeFoodDays, activityDays, weightChange, facts,
+  return { days, start, end, todayExcluded: true, rows, metrics, activityDays, weightChange, facts,
     sources: { food: 'Pasti SQLite; stime o valori inseriti', weight: 'Peso giornaliero conservato in SQLite (Intervals/import storico)', activity: 'Payload attività Intervals e copertura locale', balance: 'Non disponibile: TDEE non verificato' } };
 }
 export type TrendReport = ReturnType<typeof trendReport>;

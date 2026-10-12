@@ -1,45 +1,90 @@
-# Coach AI Web 1.0.1
+# Coach AI Web 1.2.0
 
-Pubblicazione opzionale degli allenamenti proposti sul calendario Intervals.icu.
-Default disabilitato: `intervals_calendar_write_enabled=false`; nessuna integrazione
-viene abilitata dall’aggiornamento. Database SQLite e configurazione preservati,
-SQL001–006 invariati. [Uso, contratto API e gestione degli esiti ambigui](../../addons/coachai_web/README.md#101--pubblicazione-sul-calendario).
+Coach web per Home Assistant OS amd64, Node.js 24, Fastify, React e SQLite.
 
-Prima di aggiornare, scaricare un backup completo Home Assistant. Ripristinare un
-backup antecedente all’invio perde lo stato di idempotenza: controllare il calendario
-Intervals prima di ripubblicare. Non disinstallare per aggiornare. Nessuna release
-o pubblicazione viene effettuata dalla PR di implementazione.
+## Changelog dalla 1.1.0
 
----
+- Accesso LAN opzionale con password dedicata e sessione HttpOnly; Ingress resta supportato sulla stessa installazione e sugli stessi database.
+- Host e porta espliciti per avvio autonomo, API `/api/v1` compatibili con `/api` e health minimale `/healthz`. Porta host disabilitata per default nell'add-on.
+- Navigazione a quattro tab con icone e schede allenamento, selezione automatica/manuale e grafico workout verificato.
+- Tab Pasto riorganizzato in riepilogo giornaliero, registrazione/anteprima e diario per data con modifica/cancellazione dei pasti.
+- RPE sincronizzato con Intervals.icu; diario sempre modificabile, senza chiusura/riapertura, totali letti dai pasti correnti.
+- Pacchetto completo dei componenti frontend e della licenza delle icone; controlli su import locali, sicurezza, persistenza e aggiornamento.
 
-# Coach AI Web 1.0.0
+Nessuna nuova migrazione: SQL001–006 e storico readiness invariati. Il campo
+legacy `food_complete` rimane nel database per compatibilità ma non blocca più
+le modifiche del diario. L'aggiornamento non abilita sync, Groq o calendario.
 
-Versione candidata per Home Assistant: allenamento, libreria workout Intervals.icu, diario alimentare e trend 7/30 giorni.
+## Accesso Home Assistant Ingress
 
-## Novità rispetto alla 0.9.1
+Aprire **Coach AI Web → Apri interfaccia web** da Home Assistant. Il pannello
+è riservato agli amministratori HA e usa la sessione Ingress, senza password
+web o token API. `ingress_port: 8099` resta invariato e funziona anche quando
+il mapping della porta host è disabilitato. Non aggiungere permessi Supervisor,
+`host_network`, modalità privilegiata o accesso in scrittura alla share.
 
-- Selezione prioritaria degli allenamenti dalla libreria Intervals.icu sincronizzata in cache, con fallback statico dichiarato.
-- Rigenera propone alternative compatibili anche tra sessioni/browser.
-- Stato della libreria e sincronizzazione manuale nelle Impostazioni. Aggiornamento automatico ogni 6 ore solo quando `intervals_library_sync_enabled` è abilitata; default `false`.
-- Consigli di allenamento AI quando disponibili, con comportamento di fallback.
-- Trend 7/30 giorni con grafici, copertura dei dati, sintesi AI memorizzata e fallback locale.
-- Il bilancio energetico non viene stimato senza TDEE affidabile.
+## LAN opzionale sulla stessa installazione
 
-La connessione Intervals.icu resta in sola lettura. Non sono previste modifiche allo schema SQLite per i trend.
+1. Scegliere un indirizzo stabile del NUC e una porta host libera.
+2. Impostare `lan_enabled: true` nelle opzioni dell'add-on.
+3. Impostare `lan_web_password` a un segreto casuale di 24–256 caratteri,
+   distinto da `admin_api_token` e dalle chiavi dei provider.
+4. Impostare `lan_web_origin` all'origine esatta della pagina, ad esempio
+   `http://192.168.1.30:8099`, senza path, query o credenziali.
+5. Abilitare volontariamente il mapping host per `8099/tcp` nella sezione rete
+   dell'add-on; il default è disabilitato (`null`). Se cambia la porta host,
+   aggiornare anche `lan_web_origin`. Riavviare l'add-on.
+6. Aprire quella URL e autenticarsi con la password web. Ingress continua a
+   funzionare e utilizza lo stesso database; non avviare una seconda istanza.
 
-## Prima di aggiornare dalla 0.9.1
+Durante un upgrade un mapping impostato in precedenza può rimanere attivo:
+verificarlo esplicitamente. Limitare la porta ai dispositivi della LAN fidata
+con firewall/router. HTTP non cifra password e cookie: su reti condivise usare
+HTTPS tramite proxy locale e un'origine HTTPS. Nessun port forwarding pubblico.
 
-1. Verificare che la release 1.0.0 abbia superato test completi, typecheck, build, controlli di distribuzione e smoke test di aggiornamento.
-2. Creare e scaricare un backup Home Assistant che includa Coach AI Web, dati e configurazione. Non pubblicare token o backup.
-3. Conservare una copia del database e annotare la versione installata e le opzioni attive.
-4. Pubblicare il pacchetto nel repository di distribuzione `CoachAI-Addons` solo dopo approvazione esplicita.
+Cookie HttpOnly/SameSite Strict, durata assoluta otto ore, revoca al logout o
+riavvio e limiti ai tentativi. Nessun token amministrativo viene inserito nel
+browser. Le API sensibili richiedono Ingress verificato, sessione valida o
+`Authorization: Bearer ...` con il token amministrativo esistente (almeno 32
+caratteri). Non passare segreti nella URL. Gli header proxy non autenticano.
+`/healthz` è pubblico e mostra solo lo stato HTTP; `/api/v1/health` è diagnostico
+e autenticato. Il servizio non implementa Tunnel o autenticazione Cloudflare.
 
-Non disinstallare l'add-on per aggiornare: la disinstallazione può eliminare dati persistenti.
+## Persistenza e aggiornamento dalla 1.1.0
 
-## Ripristino
+Prima dell'aggiornamento scaricare un backup completo HA che includa dati e
+configurazione. Aggiornare l'add-on esistente, senza disinstallarlo:
 
-In caso di problemi, arrestare l'add-on e ripristinare il backup Home Assistant precedente completo di dati e configurazione. Non avviare una versione precedente su un database con migrazioni incompatibili. Un ripristino comporta la perdita delle modifiche successive al backup.
+- `/data/coachai.db`: database applicativo, con ledger/checksum delle migrazioni.
+- `/data/coachai/readiness-history.sqlite`: storico readiness osservato.
+- `/data/options.json`: opzioni e credenziali, da mantenere private.
+- `/data/backups/`: eventuali backup di upgrade precedenti.
+- `/share/coachai/cycling_coach.db`: snapshot sorgente in sola lettura.
 
-## Stato della release
+I file SQLite, WAL/SHM e backup non sono parte del pacchetto sorgente pubblico.
+Fare copie consistenti tramite SQLite Backup API o con servizio fermo; non
+rimuovere WAL, ledger o dati per aggiornare. `data_source: local` richiede
+l'importazione finale già completata e non viene impostato dall'upgrade.
 
-Questa PR prepara la versione nel repository sorgente. **Non pubblica la release, non aggiorna `CoachAI-Addons` e non effettua deploy.** Le verifiche finali e la pubblicazione richiedono un passaggio separato.
+Dopo l'aggiornamento controllare versione 1.2.0, pasti/RPE/allenamenti,
+configurazione, storico e Ingress. Attivare LAN solo se desiderato. La
+pubblicazione sul calendario resta opt-in tramite
+`intervals_calendar_write_enabled` e richiede conferma di data e allenamento.
+
+Per rollback arrestare l'add-on e ripristinare il backup completo precedente;
+le modifiche successive al backup andranno perse. Non reinstallare né
+sovrascrivere un database con una copia incoerente.
+
+## Avvio autonomo fuori HA
+
+Dalla directory applicativa eseguire `npm ci`, `npm run build` e `npm start`
+con Node.js 24. Il default è `127.0.0.1:8099`. Per LAN configurare
+`COACHAI_HOST`, `COACHAI_PORT`, `COACHAI_LAN_ENABLED=true`,
+`COACHAI_LAN_WEB_PASSWORD` e `COACHAI_LAN_WEB_ORIGIN`, oltre ai percorsi
+persistenti `COACHAI_APP_DB`, `COACHAI_HISTORY`, `COACHAI_DB` e alla sorgente
+attuale. Il file opzioni può essere indicato con `COACHAI_OPTIONS_FILE`.
+Host LAN specifico preferibile a tutte le interfacce; segreti in file protetti,
+mai nel checkout. Un processo esterno a HA non viene registrato automaticamente
+come Ingress: per entrambi gli accessi usare la stessa istanza add-on.
+
+Le icone Lucide mantengono la licenza in `web/lucide-LICENSE.txt`.

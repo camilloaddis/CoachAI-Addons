@@ -86,7 +86,15 @@ export function normalizeActivities(value: unknown): Activity[] {
       name: typeof r.name === "string" ? r.name : null,
       type: typeof r.type === "string" ? r.type : null,
       commute: typeof r.commute === "boolean" ? r.commute : null,
-      rpe: number(r.session_rpe ?? r.icu_rpe ?? r.perceived_exertion, 0, 10),
+      // icu_rpe is the field written by CoachAI. An explicit null/invalid
+      // canonical value must not resurrect an older legacy alias.
+      rpe: number(
+        r.icu_rpe !== undefined
+          ? r.icu_rpe
+          : r.session_rpe ?? r.perceived_exertion,
+        0,
+        10,
+      ),
     };
   });
   return [...new Map(mapped.map((a) => [a.id, a])).values()].sort(

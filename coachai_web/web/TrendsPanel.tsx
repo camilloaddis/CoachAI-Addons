@@ -52,9 +52,9 @@ export function TrendsPanel({ active, revision }: { active: boolean; revision: u
     {error && <p role="alert">{error}</p>}
     {!data && !error && <p role="status">Caricamento trend…</p>}
     {data && <>
-      <p>{data.start} → {data.end} · oggi escluso, per confrontare giornate concluse.</p>
+      <p>{data.start} → {data.end} · oggi escluso: i dati alimentari possono essere ancora parziali.</p>
       <div className="trend-cards">
-        <article><h3>Calorie registrate</h3><strong>{value(data.metrics.calories.average, ' kcal/giorno')}</strong><p>{data.metrics.calories.observedDays}/{days} giorni con dati · {data.completeFoodDays} diari chiusi</p></article>
+        <article><h3>Calorie registrate</h3><strong>{value(data.metrics.calories.average, ' kcal/giorno')}</strong><p>{data.metrics.calories.observedDays}/{days} giorni con dati</p></article>
         <article><h3>Proteine</h3><strong>{value(data.metrics.protein.average, ' g/giorno')}</strong><p>{data.metrics.protein.observedDays}/{days} giorni con dati</p></article>
         <article><h3>Peso medio</h3><strong>{value(data.metrics.weight.average, ' kg')}</strong><p>{data.metrics.weight.observedDays} misure · prima/ultima: {value(data.weightChange, ' kg')}</p></article>
         <article><h3>Attività</h3><strong>{value(data.metrics.minutes.total, ' minuti')}</strong><p>{value(data.metrics.exerciseKcal.total, ' kcal')} registrate · copertura {data.activityDays}/{days} giorni</p></article>
@@ -68,9 +68,9 @@ export function TrendsPanel({ active, revision }: { active: boolean; revision: u
       <button onClick={() => void summarize()} disabled={busy}>{busy ? 'Preparazione sintesi…' : 'Sintesi AI del periodo'}</button>
       <details><summary>Dati giornalieri e fonti</summary>
         <p>{Object.values(data.sources).join(' · ')}</p>
-        <div className="trend-table"><table><caption>Dati registrati · ultimi {days} giorni conclusi</caption>
-          <thead><tr><th>Giorno</th><th>kcal</th><th>Proteine g</th><th>Peso kg</th><th>Attività min</th><th>Attività kcal</th><th>Diario</th></tr></thead>
-          <tbody>{data.rows.map(r => <tr key={r.date}><th scope="row">{r.date}</th><td>{value(r.calories)}</td><td>{value(r.protein)}</td><td>{value(r.weight)}</td><td>{value(r.minutes)}</td><td>{value(r.exerciseKcal)}</td><td>{r.foodComplete ? 'Chiuso' : 'Parziale/non compilato'}</td></tr>)}</tbody>
+        <div className="trend-table"><table><caption>Dati registrati · ultimi {days} giorni precedenti</caption>
+          <thead><tr><th>Giorno</th><th>kcal</th><th>Proteine g</th><th>Peso kg</th><th>Attività min</th><th>Attività kcal</th><th>Pasti registrati</th></tr></thead>
+          <tbody>{data.rows.map(r => <tr key={r.date}><th scope="row">{r.date}</th><td>{value(r.calories)}</td><td>{value(r.protein)}</td><td>{value(r.weight)}</td><td>{value(r.minutes)}</td><td>{value(r.exerciseKcal)}</td><td>{r.recordedMeals}</td></tr>)}</tbody>
         </table></div>
         <p>La copertura attività indica un’enumerazione riuscita, non garantisce che calorie o potenza siano misurate. Nessuna interpolazione del peso e nessuna stima di TDEE da dati legacy non verificati.</p>
       </details>

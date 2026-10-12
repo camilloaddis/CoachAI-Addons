@@ -1,5 +1,6 @@
 import { calendarPublication } from "./coach/calendar-publication.js";
 import { trendService } from "./coach/trends.js";
+import { readDailySummary } from "./coach/summaries.js";
 import { backupBefore006 } from "./storage/upgrade-backup.js";
 import { workoutLibrarySync } from "./coach/workout-library-sync.js";
 import { LibraryError } from "./coach/workout-library-client.js";
@@ -30,8 +31,9 @@ import { pathToFileURL } from "node:url";
 import { readinessService } from "./readiness/service.js";
 import { historyStore } from "./history.js";
 import { openStore, separatePaths } from "./storage/database.js";
-import { runtimeConfig, type RuntimeConfig } from "./config.js";
+import { runtimeConfig, listenConfig, type RuntimeConfig } from "./config.js";
 import { accessMethod, safeIngressWrite } from "./auth.js";
+import { lanAccess } from "./lan-auth.js";
 import { intervalsConfig } from "./readiness/config.js";
 
 export async function createApp(
@@ -48,8 +50,37 @@ export async function createApp(
     logger?: boolean;
   } = {},
 ) {
-  const app = Fastify({ logger: options.logger ?? true });
+  const app = Fastify({
+    trustProxy: false,
+    logger: options.logger === false ? false : {
+      // Never log credentials, cookies, request bodies or query strings.
+      redact: ["req.headers.authorization", "req.headers.cookie", "res.headers.set-cookie"],
+      serializers: { req: request => ({ method: request.method, url: request.url?.split("?")[0] }) },
+    },
+  });
   const runtime = options.runtime ?? runtimeConfig();
+  const lan = lanAccess(app, runtime, options.clock);
+  const requestAccess = (request: import("fastify").FastifyRequest) =>
+    accessMethod(request, runtime.adminToken) ??
+    (!request.headers.authorization && lan.authenticated(request) ? "session" : null);
+  app.setErrorHandler((error, _request, reply) => {
+    const code = error && typeof error === "object" && "statusCode" in error ? error.statusCode : undefined;
+    const status = typeof code === "number" && code >= 400 && code < 500 ? code : 500;
+    // Fastify's default error text can reveal absolute file paths.
+    return reply.code(status).send({ error: status === 500 ? "internal_error" : "invalid_request" });
+  });
+  app.addHook("onRequest", async (_request, reply) => {
+    reply.header("X-Content-Type-Options", "nosniff").header("Referrer-Policy", "no-referrer");
+  });
+  app.get("/healthz", async (_request, reply) =>
+    reply.header("Cache-Control", "no-store").send({ status: "ok" }));
+  // Central aliases share exactly the same handlers, authentication and storage.
+  // Keep legacy URLs for existing Ingress, scripts and clients.
+  app.addHook("onRoute", route => {
+    if (route.url.startsWith("/api/") && !route.url.startsWith("/api/v1/"))
+      // The original GET generates a HEAD route, which is aliased separately.
+      app.route({ ...route, exposeHeadRoute: false, url: route.url.replace(/^\/api\//, "/api/v1/") });
+  });
   const snapshotPath =
     options.dbPath ??
     process.env.COACHAI_DB ??
@@ -237,17 +268,19 @@ export async function createApp(
         options.groqFetcher ?? options.fetcher,
         options.clock,
         intervalSettings.athlete,
+        intervalSettings,
+        options.fetcher,
       )
     : null;
   app.addHook("onRequest", async (request, reply) => {
     if (!/^\/api(?:\/|\?|$)/.test(request.url)) return;
     reply.header("Cache-Control", "no-store");
-    const method = accessMethod(request, runtime.adminToken);
+    const method = requestAccess(request);
     if (!method) return reply.code(401).send({ error: "unauthorized" });
     if (
-      method === "ingress" &&
+      (method === "ingress" || method === "session") &&
       !["GET", "HEAD"].includes(request.method) &&
-      !safeIngressWrite(request)
+      !(method === "ingress" ? safeIngressWrite(request) : lan.safeWrite(request))
     )
       return reply.code(403).send({ error: "same_origin_request_required" });
   });
@@ -271,7 +304,7 @@ export async function createApp(
     },
   });
   app.get("/api/access", async (request) => ({
-    method: accessMethod(request, runtime.adminToken),
+    method: requestAccess(request),
   }));
   app.get("/api/coach", async (request, reply) => {
     reply.header("Cache-Control", "no-store");
@@ -573,10 +606,22 @@ export async function createApp(
           "SELECT id,date, meal_type, description, calories, protein_g, carbs_g, fat_g FROM meals ORDER BY date DESC, id DESC LIMIT 12",
         )
       : [];
+    const dailyDb = database();
     const daily = availability.daily_summary
       ? safeQuery<Record<string, unknown>>(
-          "SELECT date, weight, calories_in, protein_g, carbs_g, fat_g, exercise_kcal, training_load FROM daily_summary ORDER BY date DESC LIMIT 30",
+          availability.meals
+            ? "SELECT date FROM daily_summary UNION SELECT date FROM meals ORDER BY date DESC LIMIT 30"
+            : "SELECT date, weight, calories_in, protein_g, carbs_g, fat_g, exercise_kcal, training_load FROM daily_summary ORDER BY date DESC LIMIT 30",
         )
+          .map((row) => {
+            if (!availability.meals || !dailyDb) return row;
+            const latest = readDailySummary(dailyDb, String(row.date));
+            // Preserve the overview projection; do not expose legacy estimates.
+            return Object.fromEntries(
+              ["date", "weight", "calories_in", "protein_g", "carbs_g", "fat_g", "exercise_kcal", "training_load"]
+                .map((key) => [key, latest?.[key] ?? null]),
+            );
+          })
       : [];
     const evaluated = await readiness();
     const prescription =
@@ -607,13 +652,16 @@ export async function createApp(
         return reply
           .code(400)
           .send({ error: "Formato data richiesto: YYYY-MM-DD" });
+      const dayDb = database();
+      const stored = safeQuery<Record<string, unknown>>(
+        "SELECT * FROM daily_summary WHERE date = ?", request.params.date,
+      )[0];
+      if (stored) delete stored.food_complete;
       return {
         date: request.params.date,
-        summary:
-          safeQuery<Record<string, unknown>>(
-            "SELECT * FROM daily_summary WHERE date = ?",
-            request.params.date,
-          )[0] ?? null,
+        summary: dayDb && tableExists("daily_summary") && tableExists("meals")
+          ? readDailySummary(dayDb, request.params.date)
+          : stored ?? null,
         meals: safeQuery<Record<string, unknown>>(
           "SELECT id,date,meal_type,description,calories,protein_g,carbs_g,fat_g FROM meals WHERE date = ? ORDER BY id",
           request.params.date,
@@ -655,6 +703,7 @@ if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
+  const listen = listenConfig();
   const app = await createApp();
-  await app.listen({ host: "0.0.0.0", port: Number(process.env.PORT || 8099) });
+  await app.listen(listen);
 }

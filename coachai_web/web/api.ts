@@ -8,12 +8,15 @@ export function apiPath(
   );
   return (ingress ? ingress[0].replace(/\/$/, "") : "") + path;
 }
-export function apiFetch(path: string, options: RequestInit = {}) {
-  return fetch(apiPath(path), {
+export async function apiFetch(path: string, options: RequestInit = {}) {
+  const response = await fetch(apiPath(path), {
     ...options,
     credentials: "same-origin",
     cache: "no-store",
     headers: { ...options.headers, "X-CoachAI-Request": "1" },
   });
+  if (response.status === 401 && path.startsWith("/api/"))
+    window.dispatchEvent(new Event("coachai-unauthorized"));
+  return response;
 }
-export type Tab = "today" | "trends" | "settings";
+export type Tab = "today" | "meal" | "trends" | "settings";

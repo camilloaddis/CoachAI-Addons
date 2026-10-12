@@ -51,7 +51,7 @@ export function ReadinessPanel({
         ? "Segnali di recupero insufficiente: privilegiare il recupero."
         : r.completeness !== "complete"
           ? "Valutazione parziale: dati mancanti o incerti, senza affaticamento presunto."
-          : "Valutazione fisiologica disponibile.";
+          : "Valutazione completa.";
   return (
     <section
       className="panel readiness"
@@ -65,66 +65,8 @@ export function ReadinessPanel({
             {r?.score == null ? "—" : Math.round(r.score)}
             <span>/100</span>
           </div>
-          <p>{completeness}</p>
           <p className="muted">{physiologicalText}</p>
-          <p>
-            Disponibilità fisiologica:{" "}
-            <strong>
-              {availability == null
-                ? "Non valutabile"
-                : availabilityLabels[availability]}
-            </strong>
-          </p>
-        </section>
-        <section aria-label="Affidabilità dei dati">
-          <h2>Confidence</h2>
-          <p className="decision-value">{scoreLabel(r?.confidence)}</p>
-          <p className="muted">
-            Affidabilità dei dati, non un limite di intensità e non una misura
-            di fatica.
-          </p>
-          <details>
-            <summary>Qualità e dati mancanti</summary>
-            {quality.length ? (
-              <FactorGroups factors={quality} />
-            ) : (
-              <p>
-                {r
-                  ? "Nessuna riduzione di Confidence segnalata."
-                  : "Qualità non ancora valutata."}
-              </p>
-            )}
-            {(r?.missing.length ?? 0) > 0 && (
-              <ul>
-                {r?.missing.map((m, i) => (
-                  <li key={i}>{m}</li>
-                ))}
-              </ul>
-            )}
-          </details>
-        </section>
-        <section
-          aria-label="Consiglio automatico del Planner"
-          className="recommendation"
-        >
-          <h2>Planner · consiglio automatico</h2>
-          <p className="decision-value">
-            {r
-              ? recommendationLabel(
-                  prescription?.recommendation ?? r.recommendation,
-                )
-              : "Valutazione in corso"}
-          </p>
-          <p className="muted">
-            La disponibilità fisiologica indica cosa puoi sostenere; calendario
-            e attività recenti indicano cosa conviene oggi.
-          </p>
-          <p>
-            FTP operativa <strong>{r?.profile.ftp ?? "—"} W</strong>
-          </p>
-        </section>
-      </div>
-      <div className="metrics">
+          <div className="metrics">
         {(
           [
             ["ctl", "CTL · forma"],
@@ -137,14 +79,33 @@ export function ReadinessPanel({
             <b>{metric(r?.metrics[key])}</b>
           </div>
         ))}
-      </div>
-      <div className="prescription-limits">
-        <h3>Perché il Planner consiglia questa intensità</h3>
-        <p className="muted">
-          I limiti fisiologici derivano dal punteggio. Le precauzioni sui dati e
-          le regole di programmazione sono distinte.
-        </p>
-        <FactorGroups
+      </div>  
+          <p>
+            Disponibilità fisiologica:{" "}
+            <strong>
+              {availability == null
+                ? "Non valutabile"
+                : availabilityLabels[availability]}
+            </strong>
+          </p>
+          <p>Confidence:{" "}
+            <strong>
+              {scoreLabel(r?.confidence)}
+            </strong>
+          </p>
+          <p>Allenamento:{" "}
+            <strong>
+                {r
+                ? recommendationLabel(
+                    prescription?.recommendation ?? r.recommendation,
+                  )
+                : "Valutazione in corso"}
+            </strong>
+          </p>
+          <details>
+            <summary>Motivazioni</summary>
+
+                  <FactorGroups
           factors={constraints.filter((c) => c.applied || c.blocksRequested)}
         />
         {!constraints.some((c) => c.applied || c.blocksRequested) && (
@@ -152,8 +113,8 @@ export function ReadinessPanel({
             Nessun limite aggiuntivo rilevato rispetto al punteggio.
           </p>
         )}
-      </div>
-      <details>
+        </details>
+              <details>
         <summary>Spiegazione tecnica completa e dati mancanti</summary>
         <h3>Fattori osservati</h3>
         <FactorGroups factors={r?.factors ?? []} technical />
@@ -179,6 +140,8 @@ export function ReadinessPanel({
         <h3>Regole automatiche, in ordine</h3>
         <ConstraintTrace constraints={constraints} />
       </details>
+        </section>
+      </div>
     </section>
   );
 }

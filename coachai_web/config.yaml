@@ -1,5 +1,5 @@
 name: Coach AI Web
-version: "1.1.0"
+version: "1.2.0"
 slug: coachai_web
 description: "Coach autonomo web: allenamento, recupero e diario alimentare"
 arch:
@@ -11,7 +11,7 @@ map:
   - type: share
     read_only: true
 ports:
-  8099/tcp: 8099
+  8099/tcp: null
 ports_description:
   8099/tcp: Dashboard web
 webui: "http://[HOST]:[PORT:8099]"
@@ -21,6 +21,9 @@ panel_admin: true
 panel_icon: mdi:bike
 
 options:
+  lan_enabled: false
+  lan_web_password: ""
+  lan_web_origin: ""
   intervals_athlete_id: ""
   intervals_api_key: ""
   groq_enabled: false
@@ -35,6 +38,9 @@ options:
   admin_api_token: ""
   data_source: snapshot
 schema:
+  lan_enabled: bool
+  lan_web_password: password
+  lan_web_origin: str
   intervals_athlete_id: str
   intervals_api_key: password
   groq_enabled: bool

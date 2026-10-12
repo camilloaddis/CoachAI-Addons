@@ -1,3 +1,4 @@
+import { jsonRequest, object, ProviderError } from "../coach/http.js";
 import { requestWorkoutAdvice, applyWorkoutAdvice } from "../coach/workout-advisor.js";
 import type { CatalogWorkout } from "../coach/library-catalog.js";
 import { workoutLibraryRepository } from "../storage/workout-library.js";
@@ -34,10 +35,14 @@ export function webServices(
   fetcher: typeof fetch = fetch,
   clock: () => Date = () => new Date(),
   libraryAccount?: string,
+  intervals?: { key?: string; athlete?: string },
+  intervalsFetcher: typeof fetch = fetch,
 ) {
   const records = recordServices(db, clock),
     ai = groqClient(config, fetcher);
   const pending = new Map<string, Promise<unknown>>();
+  const pendingHashes = new Map<string, string>();
+  const pendingRpe = new Map<string, Promise<unknown>>();
   const fail = () => {
     throw new ValidationError("invalid_request");
   };
@@ -46,6 +51,10 @@ export function webServices(
     body: Record<string, unknown>,
     key: string,
   ) {
+    // Reject removed/unknown actions before consulting legacy idempotency receipts.
+    if (!["workout", "select-workout", "meal", "edit-meal", "delete-meal",
+      "activity-rpe", "activity-feedback", "recovery", "settings",
+      "nutrition-preview", "nutrition-edit", "nutrition-confirm", "nutrition-cancel"].includes(action)) fail();
     if (!key || key.length > 160 || !/^[a-zA-Z0-9_-]+$/.test(key)) fail();
     if (
       db.prepare("SELECT value FROM app_state WHERE key='import_mode'").get()
@@ -75,12 +84,29 @@ export function webServices(
     const old = cached();
     if (old !== null) return old;
     if (pending.has(key)) {
+      if (pendingHashes.get(key) !== hash) fail();
       await pending.get(key);
       return cached();
     }
+    // Keep PUT, verification and commit ordered for edits of the same activity.
+    const rpeId = action === "activity-rpe" && typeof body.activity_id === "string"
+      ? body.activity_id : null;
+    const previousRpe = rpeId === null ? undefined : pendingRpe.get(rpeId);
     const job = (async () => {
+      await previousRpe?.catch(() => {});
       let prepared: unknown;
       let finalizeWorkout: (() => unknown) | undefined;
+      if (action === "activity-rpe") {
+        if (typeof body.activity_id !== "string" || !Number.isInteger(body.rpe) || Number(body.rpe) < 1 || Number(body.rpe) > 10 ||
+          !db.prepare("SELECT activity_id FROM training_activities WHERE activity_id=?").get(body.activity_id)) fail();
+        if (!intervals?.key || !/^i?\d+$/.test(intervals.athlete ?? "")) throw new ProviderError("intervals_not_configured");
+        const url = `https://intervals.icu/api/v1/activity/${encodeURIComponent(body.activity_id as string)}`;
+        const headers = { Authorization: `Basic ${Buffer.from(`API_KEY:${intervals.key}`).toString("base64")}`, "Content-Type": "application/json" };
+        await jsonRequest(intervalsFetcher, url, { method: "PUT", headers, body: JSON.stringify({ icu_rpe: body.rpe }) });
+        const updated = object(await jsonRequest(intervalsFetcher, url, { headers }));
+        if (String(updated.id) !== body.activity_id || updated.icu_rpe !== body.rpe)
+          throw new ProviderError("intervals_rpe_unverified");
+      }
       if (action === "workout") {
         const allowed = [
           "allenamento",
@@ -252,6 +278,20 @@ export function webServices(
           if (!row) fail();
           db.prepare("DELETE FROM meals WHERE id=?").run(body.id as number);
           recalculate(db, String(row!.date));
+        } else if (action === "activity-rpe") {
+          db.prepare("UPDATE training_activities SET rpe=? WHERE activity_id=?").run(body.rpe as number, body.activity_id as string);
+          // Readers also consume the stored list payload. Keep its RPE coherent
+          // and invalidate its fingerprint so even a remote revert is imported.
+          const row = db.prepare("SELECT payload FROM activity_processing WHERE activity_id=?").get(body.activity_id as string);
+          if (row) {
+            let payload = String(row.payload);
+            try {
+              const raw = object(JSON.parse(payload));
+              raw.icu_rpe = body.rpe;
+              payload = JSON.stringify(raw);
+            } catch { /* Preserve an invalid legacy payload for diagnostics. */ }
+            db.prepare("UPDATE activity_processing SET payload=?,fingerprint='' WHERE activity_id=?").run(payload, body.activity_id as string);
+          }
         } else if (action === "activity-feedback") {
           records.feedback(
             {
@@ -301,17 +341,6 @@ export function webServices(
             updateTrainingConfig(db, `${key} ${value}`, clock());
           }
           result = trainingConfig(db);
-        } else if (action === "close-day") {
-          if (
-            typeof body.date !== "string" ||
-            !validDate(body.date) ||
-            body.date > today(clock())
-          )
-            fail();
-          recalculate(db, body.date as string);
-          db.prepare(
-            "UPDATE daily_summary SET food_complete=1 WHERE date=?",
-          ).run(body.date as string);
         } else if (action === "nutrition-preview") {
           const id = "web-" + randomUUID();
           db.prepare("INSERT INTO nutrition_drafts VALUES(?,?,?)").run(
@@ -398,10 +427,14 @@ export function webServices(
       });
     })();
     pending.set(key, job);
+    pendingHashes.set(key, hash);
+    if (rpeId !== null) pendingRpe.set(rpeId, job);
     try {
       return await job;
     } finally {
       pending.delete(key);
+      pendingHashes.delete(key);
+      if (rpeId !== null && pendingRpe.get(rpeId) === job) pendingRpe.delete(rpeId);
     }
   }
   function state() {
@@ -434,7 +467,7 @@ export function webServices(
         })),
       activities: db
         .prepare(
-          "SELECT activity_id,activity_date,name FROM training_activities ORDER BY activity_date DESC,activity_id DESC LIMIT 1000",
+          "SELECT activity_id,activity_date,name,rpe FROM training_activities ORDER BY activity_date DESC,activity_id DESC LIMIT 1000",
         )
         .all(),
       selected:

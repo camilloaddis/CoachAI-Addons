@@ -64,7 +64,7 @@ header {
 main {
   max-width: 1380px;
   margin: 0 auto;
-  padding: 42px clamp(20px, 4vw, 64px) 60px;
+  padding: 42px clamp(20px, 4vw, 64px) calc(112px + env(safe-area-inset-bottom, 0px));
 }
 .heading {
   display: flex;
@@ -292,7 +292,7 @@ footer {
   margin-left: 8px;
 }
 .recommendation h2 {
-  font-size: clamp(28px, 4vw, 44px);
+  font-size: 18px;
   text-transform: capitalize;
   margin: 8px 0 20px;
 }
@@ -302,11 +302,10 @@ footer {
 }
 .readiness .stat {
   padding: 18px;
+  min-height: 0;
 }
 .readiness details {
-  border-top: 1px solid #304154;
-  margin-top: 24px;
-  padding-top: 20px;
+  margin-top: 0px;
 }
 .readiness summary {
   cursor: pointer;
@@ -472,22 +471,43 @@ details ol small {
 }
 .tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  position: sticky;
-  top: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  position: fixed;
+  bottom: -1px;
+  left: 0;
+  right: 0;
   z-index: 3;
-  padding: 12px 0;
-  background: #10141c;
+  padding: 8px max(clamp(20px, 4vw, 64px), calc((100% - 1252px) / 2)) calc(9px + env(safe-area-inset-bottom, 0px));
+  background: #141923;
+  border-top: 1px solid #303946;
+  box-shadow: 0 -8px 24px rgb(0 0 0 / 15%);
 }
 .tabs button {
-  min-height: 48px;
-  padding: 10px 6px;
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 56px;
+  padding: 12px;
+  background: transparent;
+  color: #8994a4;
+  border: 0;
+  border-radius: 0;
 }
+.tabs button svg { width: 30px; height: 30px; }
+.tabs button:hover { color: #e8ecf2; }
 .tabs button[aria-selected="true"] {
-  background: #b9f46e;
-  color: #1c3012;
-  border-color: #b9f46e;
+  background: transparent;
+  color: #b9f46e;
+}
+.tabs button[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  bottom: 2px;
+  width: 20px;
+  height: 3px;
+  border-radius: 3px;
+  background: currentColor;
 }
 button:focus-visible,
 input:focus-visible,
@@ -529,7 +549,7 @@ pre {
 }
 @media (max-width: 600px) {
   .tabs {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 4px;
   }
   .tabs button {
@@ -562,6 +582,19 @@ pre {
   line-height: 1.3;
   margin: 20px 0;
   overflow-wrap: anywhere;
+}
+.recommendation-action {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.recommendation-go {
+  padding: 7px 12px;
+  font-size: 12px;
+}
+#workspace-training {
+  scroll-margin-top: 88px;
 }
 .training-mode,
 .training-proposal {
@@ -647,3 +680,163 @@ pre {
 .trend-charts { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:1rem; }
 .trend-chart { margin:0; min-width:0; color:inherit; }
 .trend-chart svg { width:100%; height:auto; color:#528ccb; }
+
+.header-actions { display: flex; align-items: center; gap: 12px; }
+.reload-button {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: #8994a4;
+}
+.reload-button:hover { color: #e8ecf2; }
+
+.training-mode-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 16px 0;
+}
+.training-mode-options button,
+.custom-workout-choices button,
+.legs-options button,
+.legs-toggle {
+  background: transparent;
+  color: #b9f46e;
+  border: 1px solid #b9f46e;
+}
+.training-mode-options button[aria-pressed="true"],
+.custom-workout-choices button[aria-pressed="true"],
+.legs-options button[aria-pressed="true"] {
+  background: #b9f46e;
+  color: #1c3012;
+}
+.training-mode .training-generate { width: 100%; }
+.training-mode > .training-proposal {
+  border: 0;
+  border-radius: 0;
+  margin: 24px 0 0;
+  padding: 0px 0 0;
+}
+.custom-workout-dialog {
+  width: min(520px, calc(100% - 32px));
+  max-height: calc(100dvh - 48px);
+  padding: 0;
+  border: 1px solid #414d5d;
+  border-radius: 18px;
+  background: #191f29;
+  color: #e8ecf2;
+}
+.custom-workout-dialog::backdrop { background: rgb(0 0 0 / 70%); }
+.custom-workout-content { padding: 24px; }
+.custom-workout-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.workout-subtitle { color: #abb6c2; }
+.workout-chart { margin: 24px 0; }
+.workout-chart svg { display: block; width: 100%; height: auto; min-height: 100px; }
+.workout-chart figcaption { display: flex; justify-content: space-between; gap: 8px; color: #abb6c2; font-size: 11px; margin-top: 8px; }
+.manual-alert { border-left: 3px solid #efb76a; background: #302820; border-radius: 8px; padding: 16px; margin: 20px 0; }
+.manual-alert h4 { color: #efb76a; margin: 0 0 10px; }
+.training-insight,
+.training-activities { padding: 20px; margin: 16px 0; }
+.training-insight h3,
+.training-activities h3 { margin-top: 0; }
+.training-insight > p.eyebrow { margin-top: 10px; }
+.activity-item + .activity-item { border-top: 1px solid #303946; }
+.activity-item .entry { border: 0; }
+.activity-item .entry > div:first-child { flex: 1; min-width: 0; }
+.legs-toggle { flex-shrink: 0; padding: 7px 10px; font-size: 12px; }
+.legs-picker { max-width: 360px; margin: 14px 0 4px auto; }
+.legs-legend { display: flex; justify-content: space-between; color: #abb6c2; font-size: 12px; margin-bottom: 8px; }
+.legs-options { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.legs-options button { padding: 8px; }
+.training-history { margin-top: 20px; }
+@media (max-width: 650px) {
+  .activity-item .entry { flex-wrap: wrap; gap: 12px; }
+  .activity-item .entry > div:first-child { flex-basis: 55%; }
+  .legs-picker { max-width: none; }
+  .workout-chart figcaption { flex-wrap: wrap; }
+}
+
+/* Match the outer edges and heading rhythm of the readiness card. */
+.coach-workspace { padding: 0; }
+.coach-fields { margin: 0; }
+#workspace-training > .training-mode,
+#workspace-training > .collapsible-card { width: 100%; padding: 28px; margin: 0 0 24px; border-radius: 15px; }
+.card-heading { font-size: 12px; font-weight: 700; letter-spacing: .16em; color: #b9f46e; margin: 0 0 10px; }
+.coach-workspace details.collapsible-card { margin-top: 0; }
+.collapsible-card > summary { cursor: pointer; }
+.collapsible-card:not([open]) > summary { margin-bottom: 0; }
+.training-mode-options { display: flex; align-items: center; gap: 16px; margin: 20px 0; }
+.training-mode-options select {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  min-height: 44px;
+  padding: 12px 42px 12px 18px;
+  border: 1px solid #b9f46e;
+  border-radius: 10px;
+  background: #202c39 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='m4 6 4 4 4-4' fill='none' stroke='%23b9f46e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 16px center;
+  color: #b9f46e;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  color-scheme: dark;
+}
+.training-mode-options select:hover { background-color: #293848; }
+.training-mode-options select:disabled { opacity: .6; cursor: wait; }
+.training-mode-options option { background: #191f29; color: #e8ecf2; }
+.training-controls > button { flex: 1; }
+#workspace-nutrition, #workspace-summary, #workspace-debug { padding: 24px; }
+@media (max-width: 600px) {
+  #workspace-training > .training-mode,
+  #workspace-training > .collapsible-card { padding: 20px; }
+}
+
+.training-controls .training-generate { width: auto; }
+
+.effort-control { flex: 0 0 auto; width: 80px; max-width: 100%; transition: width .22s ease; }
+.effort-control.is-expanded { width: 440px; }
+.effort-toggle, .effort-options button { background: transparent; color: #b9f46e; border: 1px solid #b9f46e; min-height: 44px; }
+.coach-workspace .effort-toggle { width: 100%; margin: 0; padding: 7px 10px; font-size: 12px; }
+.effort-options { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 4px; animation: effort-reveal .22s ease; }
+.coach-workspace .effort-options button { margin: 0; padding: 7px 0; }
+.effort-options button[aria-pressed="true"] { background: #b9f46e; color: #1c3012; }
+@keyframes effort-reveal { from { opacity: 0; transform: scaleX(.8); } to { opacity: 1; transform: scaleX(1); } }
+@media (max-width: 600px) {
+  .effort-control.is-expanded { flex-basis: 100%; width: 100%; }
+  .effort-options { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .effort-control { transition: none; }
+  .effort-options { animation: none; }
+}
+
+#workspace-nutrition { padding: 0; }
+.nutrition-card { padding: 28px; margin: 0 0 24px; border-radius: 15px; }
+.nutrition-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 24px; margin-top: 24px; }
+.nutrition-metrics span { display: block; color: #abb6c2; font-size: 13px; margin-bottom: 8px; }
+.nutrition-metrics strong { font-size: 24px; }
+.nutrition-metrics small { font-size: 13px; font-weight: 400; }
+.nutrition-add textarea { width: 100%; min-height: 110px; margin: 12px 0; resize: vertical; }
+.coach-workspace .nutrition-text-button { border: 0; background: transparent; color: #b9f46e; }
+.nutrition-date-nav { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.nutrition-date-nav > button { margin: 0; min-height: 44px; }
+.nutrition-date-nav > button:first-child, .nutrition-date-nav > button:last-child { font-size: 28px; }
+.nutrition-date-label { font-weight: 700; font-size: 18px; }
+.nutrition-calendar { display: block; margin-top: 16px; }
+.nutrition-calendar[hidden] { display: none; }
+.nutrition-meals { list-style: none; padding: 0; margin: 16px 0 0; }
+.nutrition-meals li { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 20px 0; }
+.nutrition-meals li + li { border-top: 1px solid #303946; }
+.nutrition-meals li > div { min-width: 0; overflow-wrap: anywhere; }
+.nutrition-meals p { margin: 8px 0; }
+.nutrition-pencil { flex-shrink: 0; min-height: 44px; }
+.nutrition-loading { display: flex; align-items: center; gap: 12px; padding: 24px 0; color: #abb6c2; }
+.nutrition-spinner { width: 18px; height: 18px; border: 2px solid #303946; border-top-color: #b9f46e; border-radius: 50%; animation: nutrition-spin .8s linear infinite; }
+@keyframes nutrition-spin { to { transform: rotate(360deg); } }
+@media (max-width: 600px) { .nutrition-card { padding: 20px; } }
+@media (prefers-reduced-motion: reduce) { .nutrition-spinner { animation: none; } }
