@@ -1,5 +1,6 @@
 import type { WorkoutSelection } from './training.js';
-import type { CatalogWorkout } from './library-catalog.js';
+import { librarySelectionNote, type CatalogWorkout } from './library-catalog.js';
+import { recommendations } from './planner.js';
 import { goalFocus, goalFit, goalLabels, workoutFeatures, type GoalFocus } from './workout-goals.js';
 export type AdviceReason = 'compatible' | 'goal_focus' | 'duration_fit';
 export type AdviceInput = {
@@ -40,6 +41,7 @@ export async function requestWorkoutAdvice(plan: WorkoutSelection, candidates: C
 }
 /** Revalidate against the current local shortlist inside the persistence transaction. */
 export function applyWorkoutAdvice(plan: WorkoutSelection, candidates: CatalogWorkout[], advice: PendingAdvice): WorkoutSelection {
+  if (!plan.workout) return plan;
   const goal = goalFocus(plan.config.goal);
   const selected = advice.status === 'selected' && advice.context === context(plan) ? candidates.find(c => reference(c) === advice.reference) : undefined;
   const workout = selected ?? plan.workout;
@@ -51,5 +53,5 @@ export function applyWorkoutAdvice(plan: WorkoutSelection, candidates: CatalogWo
     `Seduta della categoria ${plan.recommendation}, ${plan.decision.intent.mode === 'manual' ? 'richiesta esplicitamente' : 'consigliata dal Planner'}.`;
   const manualNote = plan.decision.exceedsRecommendation ? ` La richiesta supera il consiglio automatico ${plan.decision.automaticRecommendation}: restano validi gli avvisi della proposta.` : "";
   const fallback = status === 'provider_unavailable' ? ' AI non disponibile o risposta non valida: scelta locale.' : status === 'context_changed' ? ' Dati o candidati aggiornati durante la scelta: proposta locale rivalutata.' : '';
-  return { ...plan, workout, duration, advisor: { mode, status, explanation: `${reason} Durata ${Math.round(duration * 10) / 10} minuti.${fallback}${manualNote}`, goal, version: 1 } };
+  return { ...plan, workout, duration, catalogNote: selected ? librarySelectionNote(workout,plan.config.duration,recommendations.indexOf(plan.recommendation)) : plan.catalogNote, proposedCategory: workout.library?.category ?? null, advisor: { mode, status, explanation: `${reason} Durata ${Math.round(duration * 10) / 10} minuti.${fallback}${manualNote}`, goal, version: 1 } };
 }

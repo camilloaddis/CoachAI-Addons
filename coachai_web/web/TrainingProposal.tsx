@@ -8,6 +8,15 @@ import {
   recommendationLabel,
   scoreLabel,
 } from "./DecisionExplanation.js";
+function SelectionDiagnostics({p}: {p: Proposal}) {
+  const d=p.selectionDiagnostics;
+  if(!d) return null;
+  return <details><summary>Diagnostica selezione</summary>
+    <p>Disponibili {d.available} · compatibili {d.compatible} · classificati {d.classified} · candidati finali {d.eligible} · rosa AI {d.shortlist} (massimo 8).</p>
+    <p>Esclusioni: normalizzazione {d.excluded.normalization}; classificazione/sport {d.excluded.classificationOrSport}; categoria {d.excluded.category}; durata {d.excluded.duration}; intensità {d.excluded.intensity}; fase {d.excluded.phase}; strutture duplicate {d.excluded.duplicate}; proposta precedente {d.excluded.previous}.</p>
+    <p>Le esclusioni sono conteggiate in ordine di filtro, una volta per workout. La categoria principale non sostituisce il controllo dei picchi.</p>
+  </details>;
+}
 export function TrainingProposal({
   proposal: p,
   publication,
@@ -27,6 +36,14 @@ export function TrainingProposal({
   const status = sending || publication?.status === "sending" ? "Invio in corso" : publication?.status === "scheduled" ? "Programmato" : publication ? "Errore" : "Proposto";
   const manual = p.decision?.intent.mode === "manual";
   const warnings = p.decision?.warnings ?? [];
+  if (!p.workout) return <article className="training-proposal" aria-label="Proposta di allenamento">
+    <h3>{p.status === 'rest' ? 'Riposo' : 'Nessun workout compatibile'}</h3>
+    <p role="status">{p.noWorkoutReason}</p>
+    <p>Planner: {recommendationLabel(p.plannerRecommendation ?? p.recommendation)}. Categoria ammessa/richiesta: {recommendationLabel(p.recommendation)}.</p>
+    <p>Modifica la richiesta con i comandi sopra oppure sincronizza la libreria da Impostazioni. Nessun workout sintetico viene generato.</p>
+    <button type="button" onClick={onRegenerate}>Rivaluta la richiesta</button>
+    <SelectionDiagnostics p={p} /><ConstraintTrace constraints={p.constraints} />
+  </article>;
   return (
     <article className="training-proposal" aria-label="Proposta di allenamento">
       <p className="eyebrow">
@@ -37,6 +54,7 @@ export function TrainingProposal({
         <strong>{p.advisor.mode === "ai" ? "Scelta AI verificata" : "Consiglio locale"}</strong>
         <p>{p.advisor.explanation}</p>
       </section>}
+      <p>Planner: {recommendationLabel(p.plannerRecommendation ?? p.recommendation)} · Proposta: {p.proposedCategory ? categoryLabels[p.proposedCategory] : recommendationLabel(p.recommendation)}</p>
       <p className="muted">{p.catalogNote ?? "Proposta storica dal catalogo Coach."}</p>
       {p.workout.library && <p className="muted">Cache aggiornata: {new Date(p.workout.library.syncedAt).toLocaleString("it-IT", { timeZone: "Europe/Rome" })}. Disponibile anche senza collegamento a Intervals.</p>}
       <p>
@@ -89,7 +107,7 @@ export function TrainingProposal({
         <button type="button" onClick={onRegenerate}>
           Rigenera
         </button>
-        <button type="button" disabled={!enabled || sending || p.duration <= 0 || (!!publication && !publication.retryable)} onClick={() => setConfirming(true)}>Aggiungi a Intervals</button>
+        <button type="button" disabled={!p.workout.library || !enabled || sending || p.duration <= 0 || (!!publication && !publication.retryable)} onClick={() => setConfirming(true)}>Aggiungi a Intervals</button>
         {publication?.status === "unknown" && <button type="button" onClick={() => onPublish(true)}>Verifica esito</button>}
       </div>
       <p role="status">{status} · Data della proposta: {p.date}</p>
@@ -99,10 +117,11 @@ export function TrainingProposal({
       {publication?.status === "unknown" && <p role="alert">Esito non verificato: l’allenamento potrebbe essere già programmato. Nessun reinvio è consentito. Usa Verifica esito o controlla manualmente il calendario Intervals.</p>}
       {confirming && <section aria-label="Conferma pubblicazione">
         <p>Aggiungere «{p.workout.name}» al calendario Intervals per il giorno {p.date}?</p>
-        {!p.workout.library && <p role="alert">Questa proposta proviene dal catalogo statico CoachAI, non dalla tua libreria Intervals. Confermando verrà creato un nuovo allenamento con la struttura mostrata.</p>}
+
         <button type="button" onClick={() => { setConfirming(false); onPublish(false); }}>Conferma aggiunta</button>
         <button type="button" onClick={() => setConfirming(false)}>Annulla</button>
       </section>}
+      <SelectionDiagnostics p={p} />
       <details>
         <summary>Spiegazione tecnica completa</summary>
         <h4>
@@ -118,7 +137,7 @@ export function TrainingProposal({
           <summary>Dati strutturati della decisione</summary>
           <pre>
             {JSON.stringify(
-              { constraints: p.constraints, decision: p.decision },
+              { plannerRecommendation: p.plannerRecommendation, proposedCategory: p.proposedCategory, substitutionReason: p.substitutionReason, selection: p.selectionDiagnostics, constraints: p.constraints, decision: p.decision },
               null,
               2,
             )}

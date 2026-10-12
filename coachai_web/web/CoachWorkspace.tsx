@@ -130,7 +130,7 @@ export function CoachWorkspace({
       try {
         const response = await apiFetch(`/api/coach/proposals/${encodeURIComponent(current.id)}/publish`, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ date: current.proposal.date, allowStatic: !current.proposal.workout.library, verify }),
+          body: JSON.stringify({ date: current.proposal.date, verify }),
         });
         const result = await response.json();
         if (!response.ok) {
@@ -302,13 +302,13 @@ export function CoachWorkspace({
               <summary>Storico allenamenti e feedback</summary>
               {state.proposals.map((p) => (
                 <article key={p.id}>
-                  <strong>{p.proposal.workout.name}</strong>
+                  <strong>{p.proposal.workout?.name ?? (p.proposal.status === "rest" ? "Riposo" : "Nessun workout compatibile")}</strong>
                   <p>
                     {p.proposal.date} · {p.proposal.duration} min ·{" "}
                     {publications[p.id]?.status === "scheduled" ? "Programmato" : "Proposta"}
                   </p>
                   <pre className="workout-structure">
-                    {p.proposal.workout.structure}
+                    {p.proposal.workout?.structure ?? p.proposal.noWorkoutReason}
                   </pre>
                   <button type="button" onClick={() => setProposal(p)}>
                     Apri proposta

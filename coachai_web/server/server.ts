@@ -310,8 +310,8 @@ export async function createApp(
         )
           return reply.code(400).send({
             error:
-              error.message === "stale_proposal"
-                ? "stale_proposal"
+              ["stale_proposal", "no_compatible_workout"].includes(error.message)
+                ? error.message
                 : "invalid_request",
           });
         return reply.code(503).send({ error: "operation_unavailable" });

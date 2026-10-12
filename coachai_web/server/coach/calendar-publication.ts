@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { transaction } from "../storage/database.js";
 import { workoutLibraryRepository } from "../storage/workout-library.js";
 import { type WorkoutNode } from "./workout-normalizer.js";
-import { selectWorkout, templateDuration, trainingConfig, type Proposal } from "./training.js";
+import { selectWorkout, workoutWithinDuration, workoutStillSafe, trainingConfig, type Proposal } from "./training.js";
 import { validateIntent } from "./intent.js";
 import { readJsonResponse } from "./http.js";
 import { today, validDate, type Result } from "../readiness/types.js";
@@ -104,13 +104,15 @@ export function calendarPublication(db: DatabaseSync, settings: { key?: string; 
     const payload = db.prepare("SELECT payload FROM workout_proposals WHERE id=?").get(id)?.payload;
     if (typeof payload !== "string") throw new ValidationError("invalid_request");
     const p = JSON.parse(payload) as Proposal;
+    if (!p.workout?.library || p.status === "no_compatible_workout" || p.status === "rest") throw new ValidationError("no_compatible_workout");
     if (p.date !== body.date || p.date !== today(clock()) || !p.workout || p.duration <= 0)
       throw new ValidationError("stale_proposal");
     const config = trainingConfig(db);
-    if (p.config.ftp !== config.ftp || p.duration > config.duration) throw new ValidationError("stale_proposal");
+    if (p.config.ftp !== config.ftp || !workoutWithinDuration(p.workout,config.duration)) throw new ValidationError("stale_proposal");
     if (!p.decision?.intent) throw new ValidationError("stale_proposal");
     const intent = validateIntent(p.decision.intent);
     const fresh = selectWorkout(db, await readiness(), clock(), p.requestCommand, false, intent, account);
+    if (!workoutStillSafe(p.workout,fresh)) throw new ValidationError("stale_proposal");
     const ranks = ["riposo", "recupero", "endurance", "tempo", "sweet spot/soglia", "VO2max"];
     if (intent.mode === "automatic" && (ranks.indexOf(p.recommendation) < 0 || ranks.indexOf(p.recommendation) > ranks.indexOf(fresh.recommendation)))
       throw new ValidationError("stale_proposal");
@@ -122,13 +124,7 @@ export function calendarPublication(db: DatabaseSync, settings: { key?: string; 
         !["Ride", "VirtualRide"].includes(cached.sport)) throw new ValidationError("stale_proposal");
       description = nativeDescription(cached.normalized.steps);
       sport = cached.sport;
-    } else {
-      if (body.allowStatic !== true) throw new ValidationError("static_confirmation_required");
-      description = p.workout.structure;
-      if (typeof description !== "string" || description.length > 100000 || templateDuration(description) !== p.duration ||
-        !description.split("\n").every(l => !l.trim() || /^\d+x$/.test(l) || /^- .*\d+[ms].*\d+(?:-\d+)?%/.test(l)))
-        throw new ValidationError("invalid_workout");
-    }
+    } else throw new ValidationError("no_compatible_workout");
     // Same athlete/date/targets also deduplicates an identical regenerated proposal.
     const hash = createHash("sha256").update(JSON.stringify([account, p.date, sport, description])).digest("hex");
     const key = "calendar_publication:" + hash;

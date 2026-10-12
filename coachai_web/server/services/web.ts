@@ -13,6 +13,7 @@ import {
 } from "./records.js";
 import {
   selectWorkout,
+  workoutStillSafe,
   trainingConfig,
   updateTrainingConfig,
 } from "../coach/training.js";
@@ -174,6 +175,7 @@ export function webServices(
                 .get(body.id as string)!.payload,
             ),
           );
+          if (!stored.workout?.library) throw new ValidationError("no_compatible_workout");
           const selection = prepared as { payload: string; fresh: ReturnType<typeof selectWorkout> };
           const fresh = selection.fresh;
           if (JSON.stringify(stored) !== JSON.stringify(JSON.parse(selection.payload)))
@@ -197,7 +199,7 @@ export function webServices(
             stored.date !== today(clock()) ||
             !stored.config ||
             stored.config.ftp !== fresh.config.ftp ||
-            stored.duration > fresh.config.duration ||
+            !workoutStillSafe(stored.workout, fresh) ||
             ranks.indexOf(stored.recommendation) < 0 ||
             ranks.indexOf(stored.recommendation) >
               ranks.indexOf(fresh.recommendation)
@@ -418,8 +420,7 @@ export function webServices(
         }))
         .filter(
           (r) =>
-            r.proposal?.workout &&
-            typeof r.proposal.workout.structure === "string",
+            (r.proposal?.workout && typeof r.proposal.workout.structure === "string") || ["rest","no_compatible_workout"].includes(r.proposal?.status),
         )
         .map((r) => ({
           ...r,

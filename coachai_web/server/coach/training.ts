@@ -1,13 +1,13 @@
 import { goalFit, goalFocus } from "./workout-goals.js";
 import type { WorkoutAdvice } from "./workout-advisor.js";
-import { libraryCandidates, type CatalogWorkout } from "./library-catalog.js";
+import { libraryCandidates, librarySelectionNote, plannedCategory, plannedIntensitySafety, libraryDurationLimit, type CatalogWorkout } from "./library-catalog.js";
 import { categoryLevel, categoryLabels, validateIntent } from "./intent.js";
 import { planAutomatic, recommendations } from "./planner.js";
 import { physiologicalAvailability } from "../readiness/physiology.js";
 import { readSnapshot } from "../readiness/sources.js";
 import { assessIntensity } from "../readiness/intensity.js";
 import type { DatabaseSync } from "node:sqlite";
-import { catalog } from "./catalog.js";
+import { workoutLibraryRepository } from "../storage/workout-library.js";
 import {
   validDate,
   today,
@@ -123,9 +123,15 @@ export type WorkoutSelection = {
     warnings: Factor[];
     advisoryConstraints: Constraint[];
   };
-  workout: CatalogWorkout;
+  status: "ready" | "rest" | "no_compatible_workout";
+  workout: CatalogWorkout | null;
+  plannerRecommendation: Recommendation;
+  proposedCategory: import("../readiness/types.js").TrainingCategory | null;
+  substitutionReason: string | null;
+  noWorkoutReason: string | null;
+  selectionDiagnostics: { available: number; compatible: number; classified: number; excluded: { normalization: number; classificationOrSport: number; category: number; duration: number; intensity: number; phase: number; duplicate: number; previous: number }; eligible: number; shortlist: number; syncState: string; reasons: string[] };
   advisor?: WorkoutAdvice;
-  catalogSource: "intervals" | "static";
+  catalogSource: "intervals" | "none";
   catalogNote: string;
   requestCommand: string;
   requestSatisfied: boolean;
@@ -241,72 +247,31 @@ export function selectWorkout(
     requested,
     "La richiesta può ridurre il carico, non superare i vincoli di recupero.",
   );
-  const ceiling = [0, 60, 75, 100, 105, 130][level];
-  const recoveryVariants = [20, 30, 45].map((minutes) => ({
-    name: `Recovery ${minutes} controllato`,
-    structure: `- ${minutes}m 45-55% power=3s`,
-    difficulty: 1,
-  }));
   const remote = libraryCandidates(db, libraryAccount);
-  const minutes = (w: CatalogWorkout) => w.library ? w.library.normalized.durationSeconds / 60 : templateDuration(w.structure);
-  const peak = (w: CatalogWorkout) => w.library ? w.library.normalized.peakPowerPercentFtp : peakPower(w.structure);
-  const pool: CatalogWorkout[] = [...remote, ...(level === 1 ? recoveryVariants : catalog)];
-  const targetDuration =
-    request === "leggero" ? Math.min(30, config.duration) : config.duration;
-  let candidates = pool.filter((w) =>
-    level === 0
-      ? w.difficulty === 0
-      : w.difficulty > 0 &&
-        minutes(w) <= config.duration &&
-        peak(w) <= ceiling &&
-        (manual || phase !== "base" || w.difficulty <= 2),
-  );
-  const preferred = (w: CatalogWorkout) => {
-    if (w.library) {
-      if (intent.mode === "manual") return w.library.category === intent.category;
-      return ({ 0: ["rest"], 1: ["recovery"], 2: ["endurance"], 3: request === "forza" ? ["strength"] : ["tempo", "strength"], 4: ["sweet_spot", "threshold"], 5: ["vo2max"] } as Record<number, string[]>)[level].includes(w.library.category);
-    }
-    if (intent.mode === "manual") {
-      const patterns = {
-        rest: /^Riposo/, recovery: /^Recovery/, endurance: /^Endurance/,
-        tempo: /^Tempo/, sweet_spot: /^Sweet Spot/, threshold: /^Threshold(?!.*SFR)/,
-        vo2max: /^VO2Max/, strength: /^Threshold & SFR/,
-      };
-      return patterns[intent.category].test(w.name);
-    }
-    return level === 1
-      ? /^Recovery/.test(w.name)
-      : level === 2
-        ? /^Endurance/.test(w.name)
-        : level === 3
-          ? request === "forza"
-            ? /^Threshold & SFR/.test(w.name)
-            : /^(Tempo|Threshold & SFR)/.test(w.name)
-          : level === 4
-            ? /^(Sweet Spot|Threshold)/.test(w.name)
-            : /^VO2Max/.test(w.name);
-  };
-  const matching = candidates.filter(preferred);
-  if (matching.length || manual) candidates = matching;
-  if (!manual && level > 2 && !matching.length) {
-    limit(
-      "catalog_unavailable",
-      "plan",
-      "policy",
-      2,
-      "Nessuna struttura della categoria richiesta compatibile con durata e picco: endurance controllata.",
-    );
-    candidates = [...remote.filter(w => w.library?.category === "endurance"), ...catalog].filter(
-      (w: CatalogWorkout) =>
-        (w.library?.category === "endurance" || (!w.library && /^Endurance/.test(w.name))) &&
-        minutes(w) <= config.duration &&
-        peak(w) <= 75,
-    );
-  }
-  const usableLibrary = candidates.filter(w => w.library);
-  if (usableLibrary.length) candidates = usableLibrary;
-  // Identical target structures form one rotation choice even under different names.
-  candidates = [...new Map(candidates.map(w => [w.library?.fingerprint ?? w.name, w])).values()];
+  const repo = workoutLibraryRepository(db);
+  const validAccount = !!libraryAccount && /^i?[1-9]\d{0,19}$/.test(libraryAccount);
+  const inventory = validAccount ? repo.list(libraryAccount!, { availableOnly: true }) : [];
+  const sync = validAccount ? repo.syncState(libraryAccount!) : null;
+  const excluded = { normalization: inventory.filter(w => !w.compatible).length,
+    classificationOrSport: inventory.filter(w => w.compatible).length - remote.length,
+    category: 0, duration: 0, intensity: 0, phase: 0, duplicate: 0, previous: 0 };
+  const minutes = (w: CatalogWorkout) => w.library!.normalized.durationSeconds / 60;
+  const targetDuration = request === "leggero" ? Math.min(30, config.duration) : config.duration;
+  const preferred = (w: CatalogWorkout) => intent.mode === "manual" ? w.library!.category === intent.category :
+    ({0:[],1:["recovery"],2:["endurance"],3:["tempo","strength"],4:["sweet_spot","threshold"],5:["vo2max"]} as Record<number,string[]>)[level].includes(w.library!.category);
+  const categoryCandidates = remote.filter(preferred);
+  excluded.category = remote.length - categoryCandidates.length;
+  let candidates = categoryCandidates.filter(w => {
+    if (!workoutWithinDuration(w,config.duration)) { excluded.duration++; return false; }
+    if (!plannedIntensitySafety(w.library!.normalized,level).allowed) { excluded.intensity++; return false; }
+    if (!manual && phase === "base" && w.difficulty > 2) { excluded.phase++; return false; }
+    return true;
+  });
+  const beforeDedup = candidates.length;
+  // Stable identity independent of provider enumeration order and display name.
+  candidates.sort((a,b) => a.library!.id-b.library!.id);
+  candidates = [...new Map(candidates.map(w => [w.library!.fingerprint,w])).values()];
+  excluded.duplicate = beforeDedup-candidates.length;
   const identity = (w: CatalogWorkout) => w.library ? `${w.library.account}:${w.library.fingerprint}` : w.name;
   const histories = db
     .prepare(
@@ -342,29 +307,43 @@ export function selectWorkout(
   const alternativeCount = candidates.length;
   if (regenerate && candidates.length > 1 && (previousWorkout || histories.length)) {
     const previous = previousWorkout ?? JSON.parse(String(histories[0].payload)).workout as CatalogWorkout;
-    if (previous) candidates = candidates.filter(w => identity(w) !== identity(previous));
+    if (previous) { const before=candidates.length; candidates = candidates.filter(w => identity(w) !== identity(previous)); excluded.previous=before-candidates.length; }
   }
   const policyCandidates = request === "leggero" && !regenerate && candidates.length
     ? candidates.filter(w => Math.abs(minutes(w) - targetDuration) === Math.abs(minutes(candidates[0]) - targetDuration)) : candidates;
   const unused = policyCandidates.filter(w => !used.has(identity(w)));
   // AI cannot skip unseen structures to repeat an already proposed workout.
   const eligible = unused.length ? unused : policyCandidates.slice(0, 1);
-  collectCandidates?.(eligible.slice(0, 8));
+  const shortlist = representativeShortlist(eligible);
+  collectCandidates?.(shortlist);
   for (const c of constraints)
     c.blocksRequested = request !== "leggero" && c.ceiling === level && c.ceiling < requested;
-  const manualFallback = intent.mode === "manual" ? {
-    name: `${categoryLabels[intent.category]} — proposta breve manuale`,
-    difficulty: intent.category === "rest" ? 0 : 1,
-    structure: intent.category === "rest" ? "- Rest 1d" : intent.category === "vo2max"
-      ? "- Warm up 3m 50-65% power=3s\n\n3x\n- 1m 115% power=3s\n- 2m 50-55% power=3s\n\n- Cooldown 3m 50-45% power=3s"
-      : `- Warm up 3m 45-55% power=3s\n- ${config.duration - 6}m ${{ recovery: "45-55", endurance: "60-70", tempo: "76-85", sweet_spot: "88-94", threshold: "95-100", strength: "75-85" }[intent.category]}% ${intent.category === "strength" ? "50-60rpm " : ""}power=3s\n- Cooldown 3m 50-45% power=3s`,
-  } : null;
-  const workout: CatalogWorkout = candidates[0] || manualFallback || {
-    name:
-      level <= 1 ? "Recupero breve controllato" : "Endurance breve controllata",
-    structure: `- ${config.duration}m ${level <= 1 ? "45-55" : "55-65"}% power=3s`,
-    difficulty: 1,
+  const workout = candidates[0] ?? null;
+  const failureReasons: string[] = [];
+  if (!workout && level !== 0) {
+    if (!validAccount) failureReasons.push("library_not_configured");
+    else if (!inventory.length) failureReasons.push(sync && sync.status !== 'complete' ? "sync_failed" : "library_empty");
+    else if (!remote.length) failureReasons.push("no_classifiable_workouts");
+    else if (!categoryCandidates.length) failureReasons.push("category_absent");
+    else {
+      if (excluded.duration) failureReasons.push("duration_limit");
+      if (excluded.intensity) failureReasons.push("intensity_limit");
+      if (excluded.phase) failureReasons.push("plan_phase");
+    }
+    if (!manual && constraints.some(c => c.applied && c.ceiling < requested)) failureReasons.push("physiological_or_planner_limits");
+  }
+  const messages: Record<string,string> = {
+    library_not_configured:"Collega Intervals e sincronizza la libreria nelle Impostazioni.",
+    library_empty:"La libreria locale è vuota: sincronizza i workout dalle Impostazioni.",
+    sync_failed:"Sincronizzazione incompleta o fallita, senza workout disponibili: riprova dalle Impostazioni.",
+    no_classifiable_workouts:"Nessun workout locale ha una struttura ciclistica classificabile.",
+    category_absent:"La categoria compatibile con questa richiesta non è presente nella libreria.",
+    duration_limit:"I workout della categoria superano la durata ammessa (tolleranza massima 5 minuti/10%, nessun taglio).",
+    intensity_limit:"I target dei workout superano i limiti di intensità ammessi, inclusi durata e ampiezza dei picchi.",
+    plan_phase:"I workout non sono compatibili con la fase del piano.",
+    physiological_or_planner_limits:"Recupero o programmazione limitano la categoria consigliata: consulta le regole applicate.",
   };
+  const noWorkoutReason = level === 0 ? "Riposo consigliato: nessun workout da generare o pubblicare." : workout ? null : failureReasons.map(r=>messages[r]).join(" ");
   // Compare against the complete automatic selection, including catalog and
   // duration fallbacks. Reuse the same code; the automatic call never recurses.
   const automatic: { recommendation: Recommendation; constraints: Constraint[] } | null = manual ? selectWorkout(db, result, now, "allenamento", false,
@@ -390,11 +369,17 @@ export function selectWorkout(
       warnings: [...new Map(warnings.map(w => [w.code, w])).values()],
       advisoryConstraints: manual ? advisoryConstraints : [],
     },
+    status: level === 0 ? "rest" : workout ? "ready" : "no_compatible_workout",
+    plannerRecommendation: plan.recommendation,
+    proposedCategory: workout?.library?.category ?? null,
+    substitutionReason: rank[level] !== plan.recommendation ? (manual ? "explicit_request" : "request_or_safety_limit") : null,
+    noWorkoutReason,
+    selectionDiagnostics: { available:inventory.length, compatible:inventory.length-excluded.normalization, classified:remote.length, excluded, eligible:candidates.length, shortlist:shortlist.length, syncState:sync?.status ?? "never_synced", reasons:failureReasons },
     workout,
-    catalogSource: workout.library ? "intervals" : "static",
-    catalogNote: (workout.library ? "Workout dalla cache Intervals; struttura originale normalizzata." : "Catalogo Coach di fallback: nessun workout Intervals locale compatibile con questa richiesta.") + (regenerate && alternativeCount <= 1 ? " Nessuna alternativa compatibile disponibile: proposta mantenuta." : ""),
+    catalogSource: workout ? "intervals" : "none",
+    catalogNote: workout ? librarySelectionNote(workout,config.duration,level) + (regenerate && alternativeCount <= 1 ? " Nessuna alternativa compatibile: mantenuto l'unico workout disponibile." : "") : noWorkoutReason!,
     requestCommand: request,
-    requestSatisfied: manual ? true :
+    requestSatisfied: !workout ? level === 0 && requested === 0 : manual ? true :
       request === "leggero"
         ? level <= 2
         : ["allenamento", "pianifica"].includes(request)
@@ -403,7 +388,7 @@ export function selectWorkout(
     requested: rank[requested],
     constraints,
     limitingFactors: constraints.filter((c) => c.blocksRequested),
-    duration: minutes(workout),
+    duration: workout ? minutes(workout) : 0,
     config,
     week,
     phase,
@@ -422,3 +407,29 @@ export function selectWorkout(
 export type Proposal = ReturnType<typeof selectWorkout> & {
   explanation?: string;
 };
+
+/** Shared by generation, acceptance and calendar publication; never trims steps. */
+export function workoutWithinDuration(w: CatalogWorkout, configured: number) {
+  return !!w.library && w.library.normalized.durationSeconds / 60 <= libraryDurationLimit(configured,w.library.category);
+}
+/** Preserve the first deterministic choice and sample duration/interval-shape strata.
+ * Only already-safe, distinct, rotation-eligible candidates enter this function. */
+export function representativeShortlist(candidates: CatalogWorkout[], max = 8): CatalogWorkout[] {
+  const groups = new Map<string,CatalogWorkout[]>();
+  for (const w of candidates) {
+    const n=w.library!.normalized;
+    const key=`${w.library!.category}:${Math.floor(n.durationSeconds/900)}:${n.expandedSegments <= 12 ? 'sustained' : 'repeated'}`;
+    groups.set(key,[...(groups.get(key)??[]),w]);
+  }
+  const out: CatalogWorkout[]=[];
+  while(out.length<max && [...groups.values()].some(g=>g.length)) for(const group of groups.values()) {
+    if(group.length && out.length<max) out.push(group.shift()!);
+  }
+  return out;
+}
+
+export function workoutStillSafe(w: CatalogWorkout, selection: WorkoutSelection) {
+  if (!w.library || !workoutWithinDuration(w,selection.config.duration)) return false;
+  const category=plannedCategory(w.library.normalized);
+  return category === w.library.category && plannedIntensitySafety(w.library.normalized,recommendations.indexOf(selection.recommendation)).allowed;
+}
