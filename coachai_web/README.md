@@ -1,6 +1,20 @@
-# Coach AI Web 1.2.1
+# Coach AI Web 1.3.0
 
 Coach web per Home Assistant OS amd64, Node.js 24, Fastify, React e SQLite.
+
+## Changelog 1.3.0 dalla 1.2.1
+
+- Diagnostica della libreria: motivi di incompatibilità salvati, conteggi per codice/percorso e campioni selezionabili per ID/nome.
+- Export diagnostico di un singolo workout, dopo conferma della nuova lettura Intervals, con dati personali e note mascherati e confronto fra rifiuto live e payload sanitizzato.
+- Nessuna modifica al normalizzatore, alla classificazione o ai limiti fisiologici. Nessuna nuova migrazione o dipendenza; gli allenamenti remoti non vengono modificati.
+
+### Diagnostica dei workout incompatibili
+
+In **Impostazioni → Libreria workout Intervals → Mostra motivi di incompatibilità**, leggere i rifiuti già salvati senza chiamate API. Scegliere un workout, autorizzare la nuova lettura e premere **Scarica esempio diagnostico**. Non serve sqlite3 sulla NUC.
+
+L'export usa una nuova GET folders e scarica solo il workout scelto, con account, URL, segreti e note mascherati; il raw non viene salvato o registrato nei log. Le letture esplicite sono limitate e non avviano una sincronizzazione. Controllare `redaction.reproducesIssues: true` prima di usare il JSON come fixture. Il parser può fermarsi al primo errore: i conteggi descrivono i rifiuti osservati, non tutti i difetti del documento.
+
+Questa release serve a raccogliere evidenze sui workout incompatibili; non promette di rendere compatibili i 55 workout importati. La causa reale va verificata usando l'export.
 
 ## Changelog 1.2.1 dalla 1.2.0
 
@@ -73,7 +87,7 @@ Fare copie consistenti tramite SQLite Backup API o con servizio fermo; non
 rimuovere WAL, ledger o dati per aggiornare. `data_source: local` richiede
 l'importazione finale già completata e non viene impostato dall'upgrade.
 
-Dopo l'aggiornamento controllare versione 1.2.1, pasti/RPE/allenamenti,
+Dopo l'aggiornamento controllare versione 1.3.0, pasti/RPE/allenamenti,
 configurazione, storico e Ingress. Attivare LAN solo se desiderato. La
 pubblicazione sul calendario resta opt-in tramite
 `intervals_calendar_write_enabled` e richiede conferma di data e allenamento.

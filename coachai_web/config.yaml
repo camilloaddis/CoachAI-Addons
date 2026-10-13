@@ -1,5 +1,5 @@
 name: Coach AI Web
-version: "1.2.1"
+version: "1.3.0"
 slug: coachai_web
 description: "Coach autonomo web: allenamento, recupero e diario alimentare"
 arch:

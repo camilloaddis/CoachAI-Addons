@@ -4,6 +4,7 @@ import { readDailySummary } from "./coach/summaries.js";
 import { backupBefore006 } from "./storage/upgrade-backup.js";
 import { workoutLibrarySync } from "./coach/workout-library-sync.js";
 import { LibraryError } from "./coach/workout-library-client.js";
+import { diagnosticWorkoutId, workoutLibraryDiagnostics } from "./coach/workout-library-diagnostics.js";
 import { wellnessDiagnostics, derivedMetric } from "./readiness/diagnostics.js";
 import { telemetryDiagnostics } from "./coach/telemetry-diagnostics.js";
 import { telemetry, compareActivities } from "./readiness/telemetry.js";
@@ -285,6 +286,32 @@ export async function createApp(
       return reply.code(403).send({ error: "same_origin_request_required" });
   });
   app.get("/api/workout-library/status", async () => library?.status() ?? { error: "database_unavailable" });
+  const libraryDiagnostic = store ? workoutLibraryDiagnostics(store, intervalSettings, options.fetcher, options.clock) : null;
+  const diagnosticError = (error: unknown, reply: import('fastify').FastifyReply) => {
+    const code = error instanceof LibraryError ? error.code : 'diagnostic_failed';
+    const status = code === 'workout_not_found' ? 404 : code === 'busy' ? 409 : code === 'cooldown' ? 429 : code === 'diagnostic_output_limit' ? 413 : 503;
+    return reply.code(status).send({ error: code });
+  };
+  app.get<{ Querystring: { workoutId?: string } }>("/api/workout-library/diagnostics", async (request, reply) => {
+    if (!libraryDiagnostic) return reply.code(503).send({ error: 'database_unavailable' });
+    const value = request.query.workoutId;
+    const id = typeof value === 'string' && /^[1-9]\d{0,9}$/.test(value) ? diagnosticWorkoutId(Number(value)) : null;
+    if (value !== undefined && !id) return reply.code(400).send({ error: 'invalid_workout_id' });
+    try { return libraryDiagnostic.summary(id ?? undefined); }
+    catch (error) { return diagnosticError(error, reply); }
+  });
+  app.post<{ Body: { workoutId?: unknown; confirmRead?: unknown } }>("/api/workout-library/diagnostics/export", async (request, reply) => {
+    if (!libraryDiagnostic) return reply.code(503).send({ error: 'database_unavailable' });
+    const body = request.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body) || body.confirmRead !== true)
+      return reply.code(400).send({ error: 'explicit_read_confirmation_required' });
+    const id = diagnosticWorkoutId(body.workoutId);
+    if (!id) return reply.code(400).send({ error: 'invalid_workout_id' });
+    try {
+      const result = await libraryDiagnostic.exportWorkout(id);
+      return reply.header('Content-Disposition', `attachment; filename="workout-diagnostic-${id}.json"`).send(result);
+    } catch (error) { return diagnosticError(error, reply); }
+  });
   app.post("/api/workout-library/sync", async (_request, reply) => {
     if (!library) return reply.code(503).send({ error: "database_unavailable" });
     try { return await library.syncOnce(); }
