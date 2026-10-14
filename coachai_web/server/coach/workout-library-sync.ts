@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { workoutLibraryRepository } from '../storage/workout-library.js';
 import { fetchWorkoutLibrary, LibraryError } from './workout-library-client.js';
+import { WORKOUT_NORMALIZER_VERSION } from './workout-normalizer.js';
 
 export function workoutLibrarySync(db: DatabaseSync, settings: { enabled?: boolean; key?: string; athlete?: string },
   fetcher: typeof fetch = fetch, clock = () => new Date()) {
@@ -10,6 +11,7 @@ export function workoutLibrarySync(db: DatabaseSync, settings: { enabled?: boole
   const valid = !!account && /^i[1-9]\d{0,19}$/.test(account);
   const key = `workout_library_status:${account}`, lease = `workout_library:${account}`;
   const repo = workoutLibraryRepository(db, clock);
+  const needsRenormalization = () => valid && !!db.prepare("SELECT 1 FROM workout_library WHERE account_id=? AND available=1 AND (normalizer_version<>? OR json_type(metadata_json,'$.trainingLoad') IS NULL) LIMIT 1").get(account!, WORKOUT_NORMALIZER_VERSION);
   let running: Promise<unknown> | null = null;
   const controller = new AbortController();
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -21,10 +23,12 @@ export function workoutLibrarySync(db: DatabaseSync, settings: { enabled?: boole
   const status = () => {
     const state = valid ? repo.syncState(account!) : null;
     const saved = valid ? read() : {};
+    const staleNormalizer = needsRenormalization();
     return { enabled: settings.enabled === true, configured: valid && !!settings.key,
       classifiable: valid ? libraryCandidates(db, account).length : 0,
       lastAttempt: state?.lastAttemptAt ?? null, lastSuccess: state?.lastSuccessAt ?? null,
-      ...saved, countsCurrent: saved.generation === state?.generation && !!state?.lastSuccessAt, state: state?.status ?? 'never' };
+      ...saved, currentNormalizerVersion: WORKOUT_NORMALIZER_VERSION, needsRenormalization: staleNormalizer,
+      countsCurrent: saved.generation === state?.generation && !!state?.lastSuccessAt && !staleNormalizer, state: state?.status ?? 'never' };
   };
   async function run() {
     if (!settings.enabled) throw new LibraryError('disabled', 0);
@@ -44,7 +48,7 @@ export function workoutLibrarySync(db: DatabaseSync, settings: { enabled?: boole
       const after = repo.list(account!);
       save({ received: rows.length, compatible: after.filter(row => row.available && row.compatible).length,
         incompatible: after.filter(row => row.available && !row.compatible).length,
-        updated: after.filter(row => row.available && (!before.get(row.workoutId)?.available || before.get(row.workoutId)?.contentHash !== row.contentHash)).length,
+        updated: after.filter(row => row.available && (!before.get(row.workoutId)?.available || before.get(row.workoutId)?.contentHash !== row.contentHash || before.get(row.workoutId)?.normalizerVersion !== row.normalizerVersion)).length,
         unavailable: after.filter(row => !row.available && before.get(row.workoutId)?.available).length,
         generation: state.generation, error: null, cooldownUntil: 0 });
       return status();
@@ -66,8 +70,10 @@ export function workoutLibrarySync(db: DatabaseSync, settings: { enabled?: boole
     if (!settings.enabled || !valid || !settings.key || controller.signal.aborted) return;
     const state = repo.syncState(account!);
     const now = clock().getTime();
-    if (state?.lastSuccessAt && now - Date.parse(state.lastSuccessAt) < 6 * 3600000) return;
-    if (state?.lastAttemptAt && now - Date.parse(state.lastAttemptAt) < 30 * 60000) return;
+    const staleNormalizer = needsRenormalization();
+    if (!staleNormalizer && state?.lastSuccessAt && now - Date.parse(state.lastSuccessAt) < 6 * 3600000) return;
+    // Version upgrades bypass successful-sync freshness, never failure backoff.
+    if (state?.lastAttemptAt && now - Date.parse(state.lastAttemptAt) < 30 * 60000 && !(staleNormalizer && state.status === 'complete')) return;
     if (Number(read().cooldownUntil ?? 0) > now) return;
     await syncOnce().catch(() => {}); // sanitized failure already persisted; busy is harmless
   }

@@ -146,7 +146,7 @@ export function groqClient(
       return validateTrendChoice(output, facts.map(f => f.id));
     },
     async workout(input: AdviceInput) {
-      const result = await complete("Seleziona un solo allenamento tra i candidati già validati dal server. Le caratteristiche dei workout sono target pianificati, non esecuzione osservata. Rispetta categoria e vincoli; non usare confidence come limite di intensità. Valuta obiettivo, Readiness e carico senza inventare misure. Restituisci SOLO JSON {\"candidateId\":\"candidate-1\",\"reason\":\"compatible\"}. reason deve essere uno dei reasons del candidato. Non restituire strutture, testo libero, nuovi ID o campi aggiuntivi.", JSON.stringify(input), 1500);
+      const result = await complete("Seleziona un solo allenamento tra i candidati già validati dal server. Le caratteristiche dei workout sono target pianificati, non esecuzione osservata. Rispetta categoria e vincoli; non usare confidence come limite di intensità. Valuta obiettivo e fase del piano fra i candidati col carico più vicino al target giornaliero. icu_training_load è il carico pianificato del provider; non inventare misure e non superare la banda validata. Restituisci SOLO JSON {\"candidateId\":\"candidate-1\",\"reason\":\"compatible\"}. reason deve essere uno dei reasons del candidato. Non restituire strutture, testo libero, nuovi ID o campi aggiuntivi.", JSON.stringify(input), 1500);
       return validateWorkoutChoice(result, input);
     },
     async nutrition(text: string, date: string) {

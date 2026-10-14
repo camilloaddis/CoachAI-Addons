@@ -1,8 +1,8 @@
 import { goalFit, goalFocus } from "./workout-goals.js";
 import type { WorkoutAdvice } from "./workout-advisor.js";
-import { libraryCandidates, librarySelectionNote, plannedCategory, plannedIntensitySafety, libraryDurationLimit, type CatalogWorkout } from "./library-catalog.js";
+import { libraryCandidates, librarySelectionNote, plannedCategory, plannedIntensitySafety, type CatalogWorkout } from "./library-catalog.js";
 import { categoryLevel, categoryLabels, validateIntent } from "./intent.js";
-import { planAutomatic, recommendations } from "./planner.js";
+import { dailyLoadTarget, planAutomatic, recommendations } from "./planner.js";
 import { physiologicalAvailability } from "../readiness/physiology.js";
 import { readSnapshot } from "../readiness/sources.js";
 import { assessIntensity } from "../readiness/intensity.js";
@@ -129,7 +129,8 @@ export type WorkoutSelection = {
   proposedCategory: import("../readiness/types.js").TrainingCategory | null;
   substitutionReason: string | null;
   noWorkoutReason: string | null;
-  selectionDiagnostics: { available: number; compatible: number; classified: number; excluded: { normalization: number; classificationOrSport: number; category: number; duration: number; intensity: number; phase: number; duplicate: number; previous: number }; eligible: number; shortlist: number; syncState: string; reasons: string[] };
+  selectionDiagnostics: { available: number; compatible: number; classified: number; excluded: { normalization: number; classificationOrSport: number; category: number; duration: number; intensity: number; phase: number; duplicate: number; previous: number; loadMissing: number; loadBand: number }; eligible: number; shortlist: number; syncState: string; reasons: string[] };
+  loadTarget: import("./planner.js").DailyLoadTarget;
   advisor?: WorkoutAdvice;
   catalogSource: "intervals" | "none";
   catalogNote: string;
@@ -166,7 +167,8 @@ export function selectWorkout(
     request = intent.preference === "lighter" ? "leggero" : "intenso";
   const config = trainingConfig(db),
     date = today(now);
-  const historical = readSnapshot(db, date, now).activities.map(assessIntensity);
+  const snapshot = readSnapshot(db, date, now);
+  const historical = snapshot.activities.map(assessIntensity);
   const load48 = db.prepare(
     "SELECT SUM(training_load) total FROM training_activities WHERE activity_date BETWEEN ? AND ?",
   ).get(shift(date, -1), date)?.total;
@@ -254,9 +256,16 @@ export function selectWorkout(
   const sync = validAccount ? repo.syncState(libraryAccount!) : null;
   const excluded = { normalization: inventory.filter(w => !w.compatible).length,
     classificationOrSport: inventory.filter(w => w.compatible).length - remote.length,
-    category: 0, duration: 0, intensity: 0, phase: 0, duplicate: 0, previous: 0 };
+    category: 0, duration: 0, intensity: 0, phase: 0, duplicate: 0, previous: 0, loadMissing: 0, loadBand: 0 };
   const minutes = (w: CatalogWorkout) => w.library!.normalized.durationSeconds / 60;
-  const targetDuration = request === "leggero" ? Math.min(30, config.duration) : config.duration;
+  const targetDuration = config.duration;
+  const coverage14 = db.prepare('SELECT COUNT(*) n FROM activity_coverage WHERE date BETWEEN ? AND ? AND complete=1').get(shift(date,-14),shift(date,-1));
+  const loadTarget = dailyLoadTarget({date, score:result.score,
+    level:Math.min(level, physiologicalAvailability(result.score) ?? 1),phase,goal:goalFocus(config.goal),duration:config.duration,
+    ctl:result.metrics.ctl,historyComplete:result.planningContext?.historyComplete === true && !result.planningContext.missingActivityLoad && coverage14?.n === 14,
+    activities:snapshot.activities,load48:typeof load48==='number' ? load48 : null});
+  const distance = (w:CatalogWorkout) => Math.abs(w.library!.trainingLoad! - (loadTarget.target ?? 0));
+  const above = (w:CatalogWorkout) => Number(loadTarget.preferBelow && w.library!.trainingLoad! > (loadTarget.target ?? 0));
   const preferred = (w: CatalogWorkout) => intent.mode === "manual" ? w.library!.category === intent.category :
     ({0:[],1:["recovery"],2:["endurance"],3:["tempo","strength"],4:["sweet_spot","threshold"],5:["vo2max"]} as Record<number,string[]>)[level].includes(w.library!.category);
   const categoryCandidates = remote.filter(preferred);
@@ -265,11 +274,13 @@ export function selectWorkout(
     if (!workoutWithinDuration(w,config.duration)) { excluded.duration++; return false; }
     if (!plannedIntensitySafety(w.library!.normalized,level).allowed) { excluded.intensity++; return false; }
     if (!manual && phase === "base" && w.difficulty > 2) { excluded.phase++; return false; }
+    if (w.library!.trainingLoad == null) { excluded.loadMissing++; return false; }
+    if (loadTarget.target === null || loadTarget.target === 0 || w.library!.trainingLoad < loadTarget.minimum! || w.library!.trainingLoad > loadTarget.maximum!) { excluded.loadBand++; return false; }
     return true;
   });
   const beforeDedup = candidates.length;
   // Stable identity independent of provider enumeration order and display name.
-  candidates.sort((a,b) => a.library!.id-b.library!.id);
+  candidates.sort((a,b) => above(b)-above(a) || distance(b)-distance(a) || b.library!.id-a.library!.id);
   candidates = [...new Map(candidates.map(w => [w.library!.fingerprint,w])).values()];
   excluded.duplicate = beforeDedup-candidates.length;
   const identity = (w: CatalogWorkout) => w.library ? `${w.library.account}:${w.library.fingerprint}` : w.name;
@@ -293,13 +304,10 @@ export function selectWorkout(
       used.set(a.name, 0);
   candidates.sort(
     (a, b) =>
-      (request === "leggero" && !regenerate
-        ? Math.abs(minutes(a) - targetDuration) -
-          Math.abs(minutes(b) - targetDuration)
-        : 0) ||
+      above(a)-above(b) || distance(a)-distance(b) ||
+      goalFit(b, goalFocus(config.goal)) - goalFit(a, goalFocus(config.goal)) ||
       Number(used.has(identity(a))) - Number(used.has(identity(b))) ||
       (used.get(identity(a)) ?? 0) - (used.get(identity(b)) ?? 0) ||
-      goalFit(b, goalFocus(config.goal)) - goalFit(a, goalFocus(config.goal)) ||
       Math.abs(minutes(a) - targetDuration) -
         Math.abs(minutes(b) - targetDuration) ||
       a.name.localeCompare(b.name),
@@ -309,18 +317,19 @@ export function selectWorkout(
     const previous = previousWorkout ?? JSON.parse(String(histories[0].payload)).workout as CatalogWorkout;
     if (previous) { const before=candidates.length; candidates = candidates.filter(w => identity(w) !== identity(previous)); excluded.previous=before-candidates.length; }
   }
-  const policyCandidates = request === "leggero" && !regenerate && candidates.length
-    ? candidates.filter(w => Math.abs(minutes(w) - targetDuration) === Math.abs(minutes(candidates[0]) - targetDuration)) : candidates;
+  // AI may optimize goal/phase only within the nearest load neighbourhood.
+  const policyCandidates = candidates.filter(w => above(w) === (candidates[0] ? above(candidates[0]) : 0) &&
+    distance(w) <= (candidates[0] ? distance(candidates[0]) : 0) + Math.max(2,(loadTarget.target ?? 0)*.05));
   const unused = policyCandidates.filter(w => !used.has(identity(w)));
-  // AI cannot skip unseen structures to repeat an already proposed workout.
   const eligible = unused.length ? unused : policyCandidates.slice(0, 1);
   const shortlist = representativeShortlist(eligible);
   collectCandidates?.(shortlist);
   for (const c of constraints)
     c.blocksRequested = request !== "leggero" && c.ceiling === level && c.ceiling < requested;
-  const workout = candidates[0] ?? null;
+  const workout = eligible[0] ?? null;
   const failureReasons: string[] = [];
   if (!workout && level !== 0) {
+    if (loadTarget.target === null) failureReasons.push("load_target_unavailable");
     if (!validAccount) failureReasons.push("library_not_configured");
     else if (!inventory.length) failureReasons.push(sync && sync.status !== 'complete' ? "sync_failed" : "library_empty");
     else if (!remote.length) failureReasons.push("no_classifiable_workouts");
@@ -329,6 +338,8 @@ export function selectWorkout(
       if (excluded.duration) failureReasons.push("duration_limit");
       if (excluded.intensity) failureReasons.push("intensity_limit");
       if (excluded.phase) failureReasons.push("plan_phase");
+      if (excluded.loadMissing) failureReasons.push("workout_load_missing");
+      if (excluded.loadBand && loadTarget.target !== null) failureReasons.push("load_band");
     }
     if (!manual && constraints.some(c => c.applied && c.ceiling < requested)) failureReasons.push("physiological_or_planner_limits");
   }
@@ -338,7 +349,10 @@ export function selectWorkout(
     sync_failed:"Sincronizzazione incompleta o fallita, senza workout disponibili: riprova dalle Impostazioni.",
     no_classifiable_workouts:"Nessun workout locale ha una struttura ciclistica classificabile.",
     category_absent:"La categoria compatibile con questa richiesta non è presente nella libreria.",
-    duration_limit:"I workout della categoria superano la durata ammessa (tolleranza massima 5 minuti/10%, nessun taglio).",
+    load_target_unavailable:loadTarget.reasons.join(" "),
+    workout_load_missing:"I workout non hanno un icu_training_load valido: sincronizza la libreria; nessun carico stimato.",
+    load_band:"Nessun workout sicuro ha il carico nella banda giornaliera ammessa.",
+    duration_limit:"I workout della categoria non sono entro ±10 minuti dalla durata selezionata; nessuno step viene tagliato.",
     intensity_limit:"I target dei workout superano i limiti di intensità ammessi, inclusi durata e ampiezza dei picchi.",
     plan_phase:"I workout non sono compatibili con la fase del piano.",
     physiological_or_planner_limits:"Recupero o programmazione limitano la categoria consigliata: consulta le regole applicate.",
@@ -376,6 +390,7 @@ export function selectWorkout(
     noWorkoutReason,
     selectionDiagnostics: { available:inventory.length, compatible:inventory.length-excluded.normalization, classified:remote.length, excluded, eligible:candidates.length, shortlist:shortlist.length, syncState:sync?.status ?? "never_synced", reasons:failureReasons },
     workout,
+    loadTarget,
     catalogSource: workout ? "intervals" : "none",
     catalogNote: workout ? librarySelectionNote(workout,config.duration,level) + (regenerate && alternativeCount <= 1 ? " Nessuna alternativa compatibile: mantenuto l'unico workout disponibile." : "") : noWorkoutReason!,
     requestCommand: request,
@@ -410,7 +425,7 @@ export type Proposal = ReturnType<typeof selectWorkout> & {
 
 /** Shared by generation, acceptance and calendar publication; never trims steps. */
 export function workoutWithinDuration(w: CatalogWorkout, configured: number) {
-  return !!w.library && w.library.normalized.durationSeconds / 60 <= libraryDurationLimit(configured,w.library.category);
+  return !!w.library && Math.abs(w.library.normalized.durationSeconds / 60 - configured) <= 10;
 }
 /** Preserve the first deterministic choice and sample duration/interval-shape strata.
  * Only already-safe, distinct, rotation-eligible candidates enter this function. */
@@ -430,6 +445,8 @@ export function representativeShortlist(candidates: CatalogWorkout[], max = 8): 
 
 export function workoutStillSafe(w: CatalogWorkout, selection: WorkoutSelection) {
   if (!w.library || !workoutWithinDuration(w,selection.config.duration)) return false;
+  const load=w.library.trainingLoad;
+  if (selection.loadTarget?.target == null || selection.loadTarget.target === 0 || load == null || !Number.isFinite(load) || load < selection.loadTarget.minimum! || load > selection.loadTarget.maximum!) return false;
   const category=plannedCategory(w.library.normalized);
   return category === w.library.category && plannedIntensitySafety(w.library.normalized,recommendations.indexOf(selection.recommendation)).allowed;
 }

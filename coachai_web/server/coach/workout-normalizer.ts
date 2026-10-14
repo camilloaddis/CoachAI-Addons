@@ -1,5 +1,5 @@
 /** Pure, offline parser of verified library targets. Never classifies execution. */
-export const WORKOUT_NORMALIZER_VERSION = "1" as const;
+export const WORKOUT_NORMALIZER_VERSION = "2" as const;
 
 export type PowerTarget =
   | { kind: "constant"; units: "%ftp"; value: number }
@@ -21,9 +21,15 @@ export type NormalizationIssue = {
   code: "missing_data" | "invalid_value" | "unsupported_format" | "duration_mismatch" | "complexity_limit";
   path: string;
 };
+export type NormalizationWarning = {
+  code: "duration_mismatch";
+  path: "moving_time";
+  reportedSeconds: number;
+  structuralSeconds: number;
+};
 export type WorkoutNormalizationResult =
-  | { version: typeof WORKOUT_NORMALIZER_VERSION; status: "compatible"; workout: NormalizedWorkout; issues: [] }
-  | { version: typeof WORKOUT_NORMALIZER_VERSION; status: "incompatible"; workout: null; issues: NormalizationIssue[] };
+  | { version: typeof WORKOUT_NORMALIZER_VERSION; status: "compatible"; workout: NormalizedWorkout; issues: []; warnings: NormalizationWarning[] }
+  | { version: typeof WORKOUT_NORMALIZER_VERSION; status: "incompatible"; workout: null; issues: NormalizationIssue[]; warnings: NormalizationWarning[] };
 
 const object = (v: unknown): v is Record<string, unknown> =>
   v !== null && typeof v === "object" && !Array.isArray(v);
@@ -34,6 +40,7 @@ const targetNumber = (v: unknown): v is number =>
 
 export function normalizeLibraryWorkout(input: unknown): WorkoutNormalizationResult {
   const issues: NormalizationIssue[] = [];
+  const warnings: NormalizationWarning[] = [];
   function fail(code: NormalizationIssue["code"], path: string): never {
     issues.push({ code, path });
     throw new Error("invalid_workout");
@@ -53,7 +60,9 @@ export function normalizeLibraryWorkout(input: unknown): WorkoutNormalizationRes
   }
   function target(v: unknown, units: "%ftp" | "rpm", ramp: boolean, path: string) {
     if (!object(v)) fail(v === undefined || v === null ? "missing_data" : "invalid_value", path);
-    fields(v, ["units", "value", "start", "end"], path);
+    fields(v, ["units", "value", "start", "end", ...(units === "%ftp" ? ["target"] : [])], path);
+    // Verified Intervals display averaging; does not replace FTP endpoints.
+    if (units === "%ftp" && Object.hasOwn(v, "target") && v.target !== "3s") fail("unsupported_format", path + ".target");
     if (v.units !== units) fail("unsupported_format", path);
     if (Object.hasOwn(v, "value")) {
       if (ramp || Object.hasOwn(v, "start") || Object.hasOwn(v, "end") || !targetNumber(v.value))
@@ -111,15 +120,15 @@ export function normalizeLibraryWorkout(input: unknown): WorkoutNormalizationRes
     if (doc.distance !== undefined && doc.distance !== 0) fail("unsupported_format", "workout_doc.distance");
     if (doc.options !== undefined && (!object(doc.options) || Object.keys(doc.options).length)) fail("unsupported_format", "workout_doc.options");
     const parsed = parse(doc.steps, "workout_doc.steps", 0);
-    for (const [path, value] of [["workout_doc.duration", doc.duration], ["moving_time", input.moving_time]] as const) {
-      if (duration(value, path) !== parsed.duration) issues.push({ code: "duration_mismatch", path });
-    }
-    if (issues.length) return { version: WORKOUT_NORMALIZER_VERSION, status: "incompatible", workout: null, issues };
-    return { version: WORKOUT_NORMALIZER_VERSION, status: "compatible", issues: [], workout: {
+    if (duration(doc.duration, "workout_doc.duration") !== parsed.duration) issues.push({ code: "duration_mismatch", path: "workout_doc.duration" });
+    const reported = duration(input.moving_time, "moving_time");
+    if (reported !== parsed.duration) warnings.push({ code: "duration_mismatch", path: "moving_time", reportedSeconds: reported, structuralSeconds: parsed.duration });
+    if (issues.length) return { version: WORKOUT_NORMALIZER_VERSION, status: "incompatible", workout: null, issues, warnings };
+    return { version: WORKOUT_NORMALIZER_VERSION, status: "compatible", issues: [], warnings, workout: {
       steps: parsed.steps, durationSeconds: parsed.duration, peakPowerPercentFtp: parsed.peak, expandedSegments: parsed.count,
     } };
   } catch (error) {
     if (!issues.length) throw error;
-    return { version: WORKOUT_NORMALIZER_VERSION, status: "incompatible", workout: null, issues };
+    return { version: WORKOUT_NORMALIZER_VERSION, status: "incompatible", workout: null, issues, warnings };
   }
 }

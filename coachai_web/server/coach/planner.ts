@@ -8,6 +8,50 @@ export type PlanningContext = {
   historyComplete: boolean;
   missingActivityLoad: boolean;
 };
+export type DailyLoadTarget = {
+  target: number | null; minimum: number | null; maximum: number | null;
+  confidence: 'measured' | 'unavailable'; reasons: string[];
+  baseline: number | null; observedDays: number; preferBelow: boolean;
+};
+/** Session-sized target bounded by observed capacity. Rest days stay in the
+ * daily average; no remaining weekly budget or missed-session catch-up. */
+export function dailyLoadTarget(input: {
+  date: string; score: number | null; level: number; phase: string; goal: string;
+  duration: number; ctl: number | null; historyComplete: boolean;
+  activities: { date: string; load: number | null; duration: number | null }[];
+  load48: number | null;
+}): DailyLoadTarget {
+  const recent = input.activities.filter(a => validDate(a.date) && a.date >= shift(input.date,-14) && a.date < input.date);
+  const days = new Map<string, { load: number; duration: number }>();
+  const unavailable = (reason: string): DailyLoadTarget => ({target:null,minimum:null,maximum:null,confidence:'unavailable',reasons:[reason],baseline:null,observedDays:days.size,preferBelow:true});
+  if (input.level === 0) return {target:0,minimum:0,maximum:0,confidence:'measured',reasons:['Riposo esplicito: carico target 0, nessun workout.'],baseline:null,observedDays:0,preferBelow:true};
+  if (input.score === null) return unavailable('Readiness non valutabile: target di carico non determinabile.');
+  if (!input.historyComplete || recent.some(a => a.load === null || !Number.isFinite(a.load) || a.load < 0 || a.duration === null || !Number.isFinite(a.duration) || a.duration <= 0))
+    return unavailable('Copertura o carichi/durate misurati degli ultimi 14 giorni incompleti: target non determinabile.');
+  for (const a of recent) {
+    const day=days.get(a.date) ?? {load:0,duration:0};
+    day.load+=a.load!;day.duration+=a.duration!;days.set(a.date,day);
+  }
+  const sessions=[...days.values()].filter(d=>d.load>0);
+  if (sessions.length < 3) return unavailable('Servono almeno tre giornate con carico misurato negli ultimi 14 giorni per un target personale.');
+  const median = (values: number[]) => {values.sort((a,b)=>a-b); const i=Math.floor(values.length/2);return values.length%2 ? values[i] : (values[i-1]+values[i])/2;};
+  const sessionReference=median(sessions.map(d=>d.load/d.duration))*input.duration;
+  const dailyReference=[...days.values()].reduce((s,d)=>s+d.load,0)/14;
+  // Cap at a normal observed session and at twice the daily average. CTL is
+  // capacity only; ATL/TSB already enter readiness and are not multiplied again.
+  const baseline=Math.min(sessionReference,median(sessions.map(d=>d.load)),dailyReference*2,
+    input.ctl !== null && input.ctl > 0 ? input.ctl*1.5 : Infinity);
+  const recovery=[0,.4,.7,.85,1,1][Math.max(0,Math.min(5,input.level))] * Math.min(1,input.score/80);
+  const phase=input.phase==='scarico' ? .65 : input.phase==='base' ? .85 : input.phase==='costruzione' ? .95 : 1;
+  const goal=input.goal==='endurance' && input.level>=3 ? .95 : 1;
+  const recentRecovery=input.load48 !== null && input.load48>=95 ? .8 : 1;
+  const target=Math.round(baseline*recovery*phase*goal*recentRecovery*10)/10;
+  const maximum=Math.round(Math.min(baseline,target*1.2)*10)/10;
+  return {target,minimum:Math.round(target*.8*10)/10,maximum,confidence:'measured',baseline:Math.round(baseline*10)/10,observedDays:sessions.length,
+    preferBelow:input.score<60 || input.level<=2,
+    reasons:[`Riferimento osservato ${baseline.toFixed(1)}: ${sessions.length} giornate negli ultimi 14, durata selezionata ${input.duration} min; nessun recupero del carico perso.`,
+      `Disponibilità e categoria ×${recovery.toFixed(2)}, fase ${input.phase} ×${phase}, obiettivo ${input.goal} ×${goal}, recupero 48h ×${recentRecovery}. Banda 80–120% limitata al riferimento osservato; CTL limita la capacità, ATL/TSB entrano una sola volta nella readiness.`]};
+}
 type PlannerInput = {
   date: string;
   score: number | null;

@@ -1,5 +1,5 @@
 /** Bump when score, confidence or interpretation of recorded recommendations changes. */
-export const READINESS_MODEL_VERSION = "readiness-v3";
+export const READINESS_MODEL_VERSION = "readiness-v4";
 
 export type HistoryEntry = {
   date: string;

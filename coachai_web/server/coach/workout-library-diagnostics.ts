@@ -15,7 +15,7 @@ export function libraryDiagnostics(db: DatabaseSync, account?: string, selectedI
   const repo = workoutLibraryRepository(db), rows = repo.list(account, { availableOnly: true });
   const workouts = rows.map(row => ({ workoutId: row.workoutId, name: row.name,
     compatible: row.compatible, normalizerVersion: row.normalizerVersion,
-    issues: row.exclusionReasons, cachedOriginalComplete: row.originalComplete }));
+    issues: row.exclusionReasons, warnings: row.metadata.normalizationWarnings ?? [], cachedOriginalComplete: row.originalComplete }));
   const incompatible = workouts.filter(w => !w.compatible);
   const groups = codes.map(code => {
     const affected = incompatible.filter(w => w.issues.some(i => i.code === code));
@@ -53,13 +53,14 @@ export function redactLibraryPayload(input: unknown) {
     typeof v === 'number' ? 0 : typeof v === 'boolean' ? v : '[redacted]';
   const scalar = (v: unknown): unknown => typeof v === 'number' || typeof v === 'boolean' || v === null ? v : shape(v);
   const enumeration = (v: unknown, allowed: Set<string>) => typeof v === 'string' && allowed.has(v) ? v : shape(v);
-  function target(v: unknown, depth: number): unknown {
+  function target(v: unknown, depth: number, power: boolean): unknown {
     if (!bound(depth)) return null;
     if (!object(v)) return shape(v);
     const out: Record<string, unknown> = {}; let extra = 0;
     for (const [key, value] of Object.entries(v)) {
       if (['value', 'start', 'end'].includes(key)) out[key] = scalar(value);
       else if (key === 'units') out.units = enumeration(value, units);
+      else if (key === 'target' && power) out.target = value === '3s' ? '3s' : shape(value);
       else out[`unsupported_field_${++extra}`] = shape(value);
     }
     return out;
@@ -75,7 +76,7 @@ export function redactLibraryPayload(input: unknown) {
       for (const [key, child] of Object.entries(value)) {
         if (['duration', 'distance', 'reps', 'ramp'].includes(key)) out[key] = scalar(child);
         else if (key === 'steps') out.steps = steps(child, depth + 1);
-        else if (key === 'power' || key === 'cadence') out[key] = target(child, depth + 1);
+        else if (key === 'power' || key === 'cadence') out[key] = target(child, depth + 1, key === 'power');
         else if (key === 'text') out.text = typeof child === 'string' ?
           (child.length > 2000 ? 'x'.repeat(2001) : child.length ? '[redacted]' : '') : shape(child);
         // Known technical extra field from the uploaded export; never its values.
@@ -131,9 +132,9 @@ export function workoutLibraryDiagnostics(db: DatabaseSync, settings: { key?: st
         const kind = (value: unknown) => value === undefined ? 'missing' : value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
         const structuralFields = Object.fromEntries(['target', 'targets', 'moving_time', 'workout_doc', 'steps', 'duration', 'description'].map(field => [field, kind(object(raw) ? raw[field] : undefined)]));
         const result = { source: 'explicit_live_folders_get', workoutId, normalizerVersion: WORKOUT_NORMALIZER_VERSION,
-          cached: { normalizerVersion: cached.normalizerVersion, compatible: cached.compatible, issues: cached.exclusionReasons },
-          observed: { status: observed.status, issues: observed.issues },
-          redacted: { status: redacted.status, issues: redacted.issues }, structuralFields, payload,
+          cached: { normalizerVersion: cached.normalizerVersion, compatible: cached.compatible, issues: cached.exclusionReasons, warnings: cached.metadata.normalizationWarnings ?? [] },
+          observed: { status: observed.status, issues: observed.issues, warnings: observed.warnings },
+          redacted: { status: redacted.status, issues: redacted.issues, warnings: redacted.warnings }, structuralFields, payload,
           redaction: { truncated, reproducesIssues: !truncated && observed.status === redacted.status && JSON.stringify(observed.issues) === JSON.stringify(redacted.issues),
             personalMetadataRemoved: true, freeTextMasked: true, unknownFieldNamesMasked: true },
           limitation: 'Esportato un solo workout dalla nuova GET; raw non persistito. Nomi e valori non strutturali sono mascherati. La cache e la classificazione non sono state modificate.' };

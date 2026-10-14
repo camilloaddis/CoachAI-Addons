@@ -8,12 +8,22 @@ import {
   recommendationLabel,
   scoreLabel,
 } from "./DecisionExplanation.js";
+function LoadExplanation({p}: {p: Proposal}) {
+  const t=p.loadTarget;
+  if (!t) return null;
+  const load=p.workout?.library?.trainingLoad;
+  return <section aria-label="Carico giornaliero">
+    <p>Training Load ideale: {t.target ?? 'non determinabile'}{t.target !== null && ` · banda ${t.minimum}–${t.maximum}`} · dati {t.confidence === 'measured' ? 'misurati' : 'insufficienti'}.</p>
+    {load != null && <p>Workout Intervals: icu_training_load {load} · differenza dal target {t.target === null ? 'n/d' : (load-t.target).toFixed(1)} · durata {p.duration} min rispetto ai {p.config.duration} min selezionati (±10 min).</p>}
+    <ul>{t.reasons.map(r=><li key={r}>{r}</li>)}</ul>
+  </section>;
+}
 function SelectionDiagnostics({p}: {p: Proposal}) {
   const d=p.selectionDiagnostics;
   if(!d) return null;
   return <details><summary>Diagnostica selezione</summary>
     <p>Disponibili {d.available} · compatibili {d.compatible} · classificati {d.classified} · candidati finali {d.eligible} · rosa AI {d.shortlist} (massimo 8).</p>
-    <p>Esclusioni: normalizzazione {d.excluded.normalization}; classificazione/sport {d.excluded.classificationOrSport}; categoria {d.excluded.category}; durata {d.excluded.duration}; intensità {d.excluded.intensity}; fase {d.excluded.phase}; strutture duplicate {d.excluded.duplicate}; proposta precedente {d.excluded.previous}.</p>
+    <p>Esclusioni: normalizzazione {d.excluded.normalization}; classificazione/sport {d.excluded.classificationOrSport}; categoria {d.excluded.category}; durata {d.excluded.duration}; intensità {d.excluded.intensity}; fase {d.excluded.phase}; carico assente {d.excluded.loadMissing ?? 0}; banda carico {d.excluded.loadBand ?? 0}; strutture duplicate {d.excluded.duplicate}; proposta precedente {d.excluded.previous}.</p>
     <p>Le esclusioni sono conteggiate in ordine di filtro, una volta per workout. La categoria principale non sostituisce il controllo dei picchi.</p>
   </details>;
 }
@@ -23,7 +33,7 @@ export function TrainingProposal({ proposal: p }: { proposal: Proposal }) {
     <p role="status">{p.noWorkoutReason}</p>
     <p>Planner: {recommendationLabel(p.plannerRecommendation ?? p.recommendation)}. Categoria ammessa/richiesta: {recommendationLabel(p.recommendation)}.</p>
     <p>Modifica la richiesta con i comandi sopra oppure sincronizza la libreria da Impostazioni. Nessun workout sintetico viene generato.</p>
-    <SelectionDiagnostics p={p} /><ConstraintTrace constraints={p.constraints} />
+    <LoadExplanation p={p} /><SelectionDiagnostics p={p} /><ConstraintTrace constraints={p.constraints} />
   </article>;
   return (
     <article className="training-proposal" aria-label="Proposta di allenamento">
@@ -56,6 +66,7 @@ export function TrainingInsight({ proposal: p }: { proposal: Proposal | null }) 
       <div><dt>Readiness alla generazione</dt><dd>{scoreLabel(p.readiness)}</dd></div>
       <div><dt>Confidence alla generazione</dt><dd>{scoreLabel(p.confidence)}</dd></div>
     </dl>
+    <LoadExplanation p={p} />
     <h4>{manual ? "Consiglio automatico non applicato alla richiesta manuale" : "Regole applicate alla proposta automatica"}</h4>
     {constraints?.length ? <ul>{constraints.map((c, i) => <li key={c.code + i} data-rule-code={c.code}>{c.text}</li>)}</ul> : <p>Nessuna regola aggiuntiva limita questa proposta.</p>}
     {!manual && (p.decision?.warnings.length ?? 0) > 0 && <FactorGroups factors={p.decision.warnings} />}

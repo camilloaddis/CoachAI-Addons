@@ -5,6 +5,7 @@ import {
   normalizeLibraryWorkout,
   type NormalizedWorkout,
   type NormalizationIssue,
+  type NormalizationWarning,
 } from "../coach/workout-normalizer.js";
 
 export type CachedWorkout = {
@@ -13,7 +14,7 @@ export type CachedWorkout = {
   folderId: number | null;
   name: string;
   sport: string;
-  metadata: { target: string | null; targets: string[] | null; indoor: boolean | null };
+  metadata: { target: string | null; targets: string[] | null; indoor: boolean | null; trainingLoad?: number | null; trainingLoadSource?: 'intervals.icu_training_load'; normalizationWarnings?: NormalizationWarning[] };
   original: Record<string, unknown>;
   originalComplete: boolean;
   normalized: NormalizedWorkout | null;
@@ -111,10 +112,14 @@ export function workoutLibraryRepository(db: DatabaseSync, clock: () => Date = (
         else if (v.text !== undefined) complete = false;
         for (const k of ["power", "cadence"]) if (object(v[k])) {
           const target: Record<string, unknown> = {};
-          if (Object.keys(v[k]).some(q => !["units", "value", "start", "end"].includes(q))) complete = false;
+          if (Object.keys(v[k]).some(q => !["units", "value", "start", "end", ...(k === "power" ? ["target"] : [])].includes(q))) complete = false;
           for (const q of ["value", "start", "end"]) if (typeof v[k][q] === "number") target[q] = v[k][q];
           else if (Object.hasOwn(v[k], q)) complete = false;
           if (typeof v[k].units === "string") target.units = text(v[k].units, 40);
+          if (k === "power" && Object.hasOwn(v[k], "target")) {
+            if (v[k].target === "3s") target.target = "3s";
+            else complete = false; // Unknown values can contain private data.
+          }
           out[k] = target;
         }
         for (const k of ["power", "cadence"]) if (v[k] !== undefined && !object(v[k])) complete = false;
@@ -142,6 +147,8 @@ export function workoutLibraryRepository(db: DatabaseSync, clock: () => Date = (
       original.description = lines.map(l => l.trim() ? text(l, 4000) : "").join("\n");
     }
     const normalized = normalization.workout;
+    // Provider load only: never estimate it from duration or power targets.
+    const trainingLoad = typeof raw.icu_training_load === 'number' && Number.isFinite(raw.icu_training_load) && raw.icu_training_load >= 0 && raw.icu_training_load <= 2000 ? raw.icu_training_load : null;
     // Normalize stored labels too; raw text must never bypass metadata sanitization.
     function safeLabels(steps: NormalizedWorkout["steps"]) {
       for (const s of steps) {
@@ -156,13 +163,15 @@ export function workoutLibraryRepository(db: DatabaseSync, clock: () => Date = (
       // Unknown operative fields affect the hash but are not persisted verbatim.
       contentHash = createHash("sha256").update(canonical({
         folderId, name, sport, target: raw.target ?? null, targets: raw.targets ?? null,
-        indoor: raw.indoor ?? null, moving_time: raw.moving_time ?? null,
+        indoor: raw.indoor ?? null, moving_time: raw.moving_time ?? null, trainingLoad,
         description: raw.description ?? null, workout_doc: { steps: doc.steps ?? null, duration: doc.duration ?? null, distance: doc.distance ?? null, options: doc.options ?? null },
       })).digest("hex");
     } catch { return invalid(); }
     return {
       accountId, workoutId, folderId, name, sport,
-      metadata: { target, targets, indoor: typeof raw.indoor === "boolean" ? raw.indoor : null },
+      metadata: { target, targets, indoor: typeof raw.indoor === "boolean" ? raw.indoor : null,
+        trainingLoad, trainingLoadSource: 'intervals.icu_training_load',
+        ...(normalization.warnings.length ? { normalizationWarnings: normalization.warnings } : {}) },
       original, originalComplete: complete, normalized,
       durationSeconds: normalized?.durationSeconds ?? null,
       peakPowerPercentFtp: normalized?.peakPowerPercentFtp ?? null,

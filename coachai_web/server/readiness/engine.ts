@@ -120,13 +120,13 @@ export function evaluate(input: Input): Result {
     weight += w;
   };
   if (tsb !== null) {
-    add(tsb < -30 ? 20 : tsb < -20 ? 40 : tsb < -10 ? 60 : 85, 30);
+    add(tsb < -30 ? 20 : tsb < -20 ? 40 : tsb < -10 ? 60 : 85, 40);
     factor(
       "tsb",
       "physiology",
       tsb < -10 ? "negative" : "positive",
       "measured",
-      `CTL ${ctl!.toFixed(1)}, ATL ${atl!.toFixed(1)}, TSB ${tsb.toFixed(1)} (CTL − ATL).`,
+      `CTL ${ctl!.toFixed(1)}, ATL ${atl!.toFixed(1)}, TSB ${tsb.toFixed(1)} (CTL − ATL): unico contributo carico, peso 40%. ATL/CTL e carichi recenti sono protezioni, non altri voti.`,
     );
     if (tsb < -30)
       physiologyLimit(
@@ -182,13 +182,13 @@ export function evaluate(input: Input): Result {
         bad = inverted ? ratio > 1.1 : ratio < 0.8,
         moderate = inverted ? ratio > 1.05 : ratio < 0.9;
       diagnostic.baseline.value = mean;
-      add(bad ? 30 : moderate ? 60 : 90, 20);
+      add(bad ? 30 : moderate ? 60 : 90, key === 'hrv' ? 30 : 10);
       factor(
         key,
         "physiology",
         bad || moderate ? "negative" : "positive",
         "measured",
-        `${label}: ${value}, baseline ${mean.toFixed(1)} (${values.length} giorni).`,
+        `${label}: ${value}, baseline ${mean.toFixed(1)} (${values.length} giorni), peso ${key === 'hrv' ? 30 : 10}%.`,
       );
       if (bad)
         physiologyLimit(
@@ -205,7 +205,6 @@ export function evaluate(input: Input): Result {
   }
   const sleep = current?.sleepScore ?? null;
   if (sleep !== null) {
-    add(sleep, 15);
     factor(
       "sleep",
       "physiology",
@@ -223,6 +222,21 @@ export function evaluate(input: Input): Result {
       );
   } else missing.push("Sleep score odierno assente.");
   const sleepSecs = sleepDuration(current?.sleepSecs);
+  const sleepSamples = past.map(w => sleepDuration(w.sleepSecs)).filter((v): v is number => v !== null);
+  const sleepBaseline = sleepSamples.length >= 5 ? sleepSamples.reduce((s,v) => s+v,0)/sleepSamples.length : null;
+  const durationScore = sleepSecs !== null && sleepBaseline !== null
+    ? Math.min(100, 100 * sleepSecs / Math.max(7 * 3600, sleepBaseline)) : null;
+  // Correlated sleep signals share one 20% contribution, renormalized when one
+  // is absent. A chronically short baseline never makes <7h optimal.
+  const sleepGroup = sleep !== null && durationScore !== null ? .6*sleep + .4*durationScore : sleep ?? durationScore;
+  if (sleepGroup !== null) {
+    add(sleepGroup, 20);
+    factor('sleep_group', 'physiology', sleepGroup < 60 ? 'negative' : 'neutral', 'measured',
+      `Sonno: contributo unico ${Math.round(sleepGroup)}/100, peso 20%; qualità 60% e durata 40% quando entrambe disponibili. Baseline durata ${sleepBaseline === null ? 'non disponibile' : (sleepBaseline/3600).toFixed(1)+' ore'} (${sleepSamples.length} giorni); pesi disponibili rinormalizzati.`);
+  }
+  const sleepDiagnostic = metricDiagnostics.find(m => m.key === 'sleepSecs')!;
+  sleepDiagnostic.baseline = { value: sleepBaseline, samples: sleepSamples.length };
+  if (sleepBaseline === null) missing.push('Baseline durata sonno di almeno 5 giorni negli ultimi 28 assente: durata esclusa dal contributo, protezione sonno breve conservata.');
   if (sleepSecs !== null) {
     factor("sleep_duration", "physiology", sleepSecs < 5 * 3600 ? "negative" : "neutral", "measured",
       `Durata sonno odierna ${(sleepSecs / 3600).toFixed(1)} ore (sleepSecs).`);
@@ -317,7 +331,6 @@ export function evaluate(input: Input): Result {
         1,
         "Carico recente oltre il 150% del riferimento CTL × 7.",
       );
-      add(35, 15);
     }
   } else missing.push("Carico recente non quantificabile.");
   const heavyDay = [date, shift(date, -1)].some((d) => {
@@ -335,7 +348,6 @@ export function evaluate(input: Input): Result {
       1,
       "Lungo o carico >120 oggi/ieri: privilegiare recupero.",
     );
-    add(45, 10);
   }
   const possibleHard = new Set(assessments.filter(a => a.isHard === true).map(a => a.date));
   let possibleSequence = 0;
@@ -401,6 +413,7 @@ export function evaluate(input: Input): Result {
       : !current ||
           confidence < 75 ||
           !baselineComplete ||
+          sleepBaseline === null ||
           sleepSecs === null ||
           [
             current.ctl,
@@ -434,7 +447,7 @@ export function evaluate(input: Input): Result {
           m.key === "ctl" || m.key === "atl"
             ? tsb !== null
             : m.key === "sleepSecs"
-              ? sleepSecs !== null
+              ? durationScore !== null
             : m.key === "sleepScore"
               ? sleep !== null
               : m.scoreEligible,

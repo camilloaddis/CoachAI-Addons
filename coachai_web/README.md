@@ -1,6 +1,24 @@
-# Coach AI Web 1.3.0
+# Coach AI Web 1.4.0
 
 Coach web per Home Assistant OS amd64, Node.js 24, Fastify, React e SQLite.
+
+## Changelog 1.4.0 dalla 1.3.0
+
+- Supporto Intervals `power.target: "3s"` conservando i range FTP. La durata degli step validati prevale su `moving_time`; le differenze vengono segnalate senza tagliare gli step.
+- Readiness v4: CTL/ATL/TSB condividono il contributo carico; qualità/durata del sonno condividono il contributo sonno. Baseline personali per HRV e durata; dati mancanti esclusi, Confidence separata.
+- Target giornaliero deterministico da carico recente, recupero, obiettivo e fase, con banda ammessa. Ranking per `icu_training_load`, durata entro ±10 minuti inclusivi e AI limitata alla rosa validata.
+- Cache precedente rivalutata alla prossima sincronizzazione, rispettando cooldown/backoff. Nessun workout sintetico: assenza di carico, dati o candidati produce motivi espliciti.
+- Classificazione, limiti dei picchi, SQL001–006, dipendenze e opzioni invariati. La preparazione 1.4.0 aggiorna solo metadati e documentazione del codice già mergiato.
+
+### Verifica sul NUC dopo l'aggiornamento
+
+1. Verificare **1.4.0** nell'interfaccia, accesso Ingress/LAN e persistenza di configurazione, pasti e storico. Conservare un backup completo HA; aggiornare senza disinstallare né reimportare.
+2. In **Impostazioni → Libreria workout Intervals**, sincronizzare la libreria dell'account già configurato (opzione `intervals_library_sync_enabled`). Non serve sqlite3. Controllare ultima sincronizzazione, compatibili/incompatibili e diagnostica dei rifiuti. Se la libreria contiene ancora gli stessi 55 workout, verificare che i 55 siano compatibili col parser; eventuali rifiuti vanno analizzati per codice/percorso, non nascosti.
+3. Compatibile col parser non significa selezionabile: categoria, sport, durata, picchi, fase e carico possono escludere un workout. Per i quattro workout con differenze `moving_time`, scegliere il workout nella diagnostica e scaricare l’esempio dopo conferma: `cached.warnings` e `observed.warnings` devono riportare `duration_mismatch`; la proposta deve mantenere la durata integrale degli step e i range FTP.
+4. Aggiornare la sincronizzazione attività/wellness già configurata e impostare obiettivo, piano e durata. Per il target servono copertura dei 14 giorni precedenti e almeno tre giornate con carico/durata validi. In Training generare una nuova proposta e aprire **INSIGHT** e leggere **Training Load ideale**: verificare target/banda, `icu_training_load`, differenza, durata entro ±10 min e motivazioni. Consultare la diagnostica selezione per esclusioni di carico assente o fuori banda.
+5. Con recupero ridotto o fase scarico verificare target ridotto e limiti fisiologici; nessun candidato deve mostrare il motivo. Rigenera deve usare solo alternative compatibili. AI disabilitata/non disponibile mantiene una scelta locale reale; quando attiva sceglie nella rosa validata. Nessuna pubblicazione sul calendario è necessaria per questi controlli.
+
+Lo storico precedente resta distinto dal modello readiness-v4. Il carico del workout proviene solo da `icu_training_load`: assente/invalido è null, non viene stimato. I 55 workout reali vanno verificati sul NUC: i test di sviluppo modellano lo schema noto, non il loro export completo.
 
 ## Changelog 1.3.0 dalla 1.2.1
 
@@ -14,7 +32,7 @@ In **Impostazioni → Libreria workout Intervals → Mostra motivi di incompatib
 
 L'export usa una nuova GET folders e scarica solo il workout scelto, con account, URL, segreti e note mascherati; il raw non viene salvato o registrato nei log. Le letture esplicite sono limitate e non avviano una sincronizzazione. Controllare `redaction.reproducesIssues: true` prima di usare il JSON come fixture. Il parser può fermarsi al primo errore: i conteggi descrivono i rifiuti osservati, non tutti i difetti del documento.
 
-Questa release serve a raccogliere evidenze sui workout incompatibili; non promette di rendere compatibili i 55 workout importati. La causa reale va verificata usando l'export.
+La 1.3.0 aggiungeva la raccolta delle evidenze, senza correggere il parser. La 1.4.0 include la correzione di `power.target: "3s"`; usare la diagnostica per eventuali altri formati rifiutati.
 
 ## Changelog 1.2.1 dalla 1.2.0
 
@@ -87,7 +105,7 @@ Fare copie consistenti tramite SQLite Backup API o con servizio fermo; non
 rimuovere WAL, ledger o dati per aggiornare. `data_source: local` richiede
 l'importazione finale già completata e non viene impostato dall'upgrade.
 
-Dopo l'aggiornamento controllare versione 1.3.0, pasti/RPE/allenamenti,
+Dopo l'aggiornamento controllare versione 1.4.0, pasti/RPE/allenamenti,
 configurazione, storico e Ingress. Attivare LAN solo se desiderato. La
 pubblicazione sul calendario resta opt-in tramite
 `intervals_calendar_write_enabled` e richiede conferma di data e allenamento.

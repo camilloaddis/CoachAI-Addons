@@ -6,7 +6,7 @@ import type { TrainingCategory } from '../readiness/types.js';
 
 export type CatalogWorkout = {
   name: string; structure: string; difficulty: number;
-  library?: { account: string; id: number; contentHash: string; fingerprint: string; category: TrainingCategory; normalized: NormalizedWorkout; syncedAt: string };
+  library?: { account: string; id: number; contentHash: string; fingerprint: string; category: TrainingCategory; normalized: NormalizedWorkout; syncedAt: string; trainingLoad?: number | null; trainingLoadSource?: 'intervals.icu_training_load' };
 };
 /** Distribution of planned targets, never evidence of completed work.
  * Linear ramps contribute proportional time. A narrow non-ramp range uses its
@@ -75,7 +75,7 @@ export function plannedIntensitySafety(workout: NormalizedWorkout, level: number
   return { allowed, ceiling, peak: workout.peakPowerPercentFtp, excessSeconds, longestExcessSeconds:longest, briefExcursion:allowed && excessSeconds>0 };
 }
 export function libraryDurationLimit(configured: number, category?: TrainingCategory) {
-  return configured + (category && !['rest','recovery'].includes(category) ? Math.min(5,configured*.1) : 0);
+  return configured + 10;
 }
 export function structureFingerprint(workout: NormalizedWorkout): string {
   // Canonical executed-order targets, independent of labels and repeat grouping.
@@ -106,7 +106,7 @@ export function libraryCandidates(db: DatabaseSync, account?: string): CatalogWo
     const category = plannedCategory(row.normalized);
     if (!category) return [];
     return [{ name: row.name, structure: display(row.normalized.steps), difficulty: ['recovery','endurance'].includes(category) ? 1 : ['tempo','strength'].includes(category) ? 2 : 3,
-      library: { account: row.accountId, id: row.workoutId, contentHash: row.contentHash, fingerprint: structureFingerprint(row.normalized), category, normalized: row.normalized, syncedAt: row.lastSyncedAt } }];
+      library: { account: row.accountId, id: row.workoutId, contentHash: row.contentHash, fingerprint: structureFingerprint(row.normalized), category, normalized: row.normalized, syncedAt: row.lastSyncedAt, trainingLoad: row.metadata.trainingLoad ?? null, trainingLoadSource: 'intervals.icu_training_load' } }];
   });
 }
 
