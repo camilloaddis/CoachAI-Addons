@@ -264,10 +264,10 @@ export function selectWorkout(
     level:Math.min(level, physiologicalAvailability(result.score) ?? 1),phase,goal:goalFocus(config.goal),duration:config.duration,
     ctl:result.metrics.ctl,historyComplete:result.planningContext?.historyComplete === true && !result.planningContext.missingActivityLoad && coverage14?.n === 14,
     activities:snapshot.activities,load48:typeof load48==='number' ? load48 : null});
-  const distance = (w:CatalogWorkout) => Math.abs(w.library!.trainingLoad! - (loadTarget.target ?? 0));
-  const above = (w:CatalogWorkout) => Number(loadTarget.preferBelow && w.library!.trainingLoad! > (loadTarget.target ?? 0));
+  const distance = (w:CatalogWorkout) => loadTarget.target === null ? 0 : Math.abs(w.library!.trainingLoad! - loadTarget.target);
+  const above = (w:CatalogWorkout) => Number(loadTarget.target !== null && loadTarget.preferBelow && w.library!.trainingLoad! > loadTarget.target);
   const preferred = (w: CatalogWorkout) => intent.mode === "manual" ? w.library!.category === intent.category :
-    ({0:[],1:["recovery"],2:["endurance"],3:["tempo","strength"],4:["sweet_spot","threshold"],5:["vo2max"]} as Record<number,string[]>)[level].includes(w.library!.category);
+    categoryLevel[w.library!.category] > 0 && categoryLevel[w.library!.category] <= level;
   const categoryCandidates = remote.filter(preferred);
   excluded.category = remote.length - categoryCandidates.length;
   let candidates = categoryCandidates.filter(w => {
@@ -275,9 +275,18 @@ export function selectWorkout(
     if (!plannedIntensitySafety(w.library!.normalized,level).allowed) { excluded.intensity++; return false; }
     if (!manual && phase === "base" && w.difficulty > 2) { excluded.phase++; return false; }
     if (w.library!.trainingLoad == null) { excluded.loadMissing++; return false; }
-    if (loadTarget.target === null || loadTarget.target === 0 || w.library!.trainingLoad < loadTarget.minimum! || w.library!.trainingLoad > loadTarget.maximum!) { excluded.loadBand++; return false; }
+    // A manual category is explicit: automatic load guidance must not veto it.
+    // The ideal +/-20% band ranks work; observed capacity remains the hard cap.
+    if (physiologicalAvailability(result.score) === 0 || (!manual && (loadTarget.target === null || loadTarget.target === 0 || w.library!.trainingLoad > (loadTarget.baseline ?? loadTarget.maximum)!))) { excluded.loadBand++; return false; }
     return true;
   });
+  // Preserve the planned stimulus when its category has safe available work.
+  // Lower categories remain real alternatives only when that category is empty.
+  if (!manual && candidates.some(w => categoryLevel[w.library!.category] === level)) {
+    const primary=candidates.filter(w => categoryLevel[w.library!.category] === level);
+    excluded.category += candidates.length-primary.length;
+    candidates=primary;
+  }
   const beforeDedup = candidates.length;
   // Stable identity independent of provider enumeration order and display name.
   candidates.sort((a,b) => above(b)-above(a) || distance(b)-distance(a) || b.library!.id-a.library!.id);
@@ -305,6 +314,7 @@ export function selectWorkout(
   candidates.sort(
     (a, b) =>
       above(a)-above(b) || distance(a)-distance(b) ||
+      (manual ? 0 : categoryLevel[b.library!.category]-categoryLevel[a.library!.category]) ||
       goalFit(b, goalFocus(config.goal)) - goalFit(a, goalFocus(config.goal)) ||
       Number(used.has(identity(a))) - Number(used.has(identity(b))) ||
       (used.get(identity(a)) ?? 0) - (used.get(identity(b)) ?? 0) ||
@@ -329,7 +339,7 @@ export function selectWorkout(
   const workout = eligible[0] ?? null;
   const failureReasons: string[] = [];
   if (!workout && level !== 0) {
-    if (loadTarget.target === null) failureReasons.push("load_target_unavailable");
+    if (!manual && loadTarget.target === null) failureReasons.push("load_target_unavailable");
     if (!validAccount) failureReasons.push("library_not_configured");
     else if (!inventory.length) failureReasons.push(sync && sync.status !== 'complete' ? "sync_failed" : "library_empty");
     else if (!remote.length) failureReasons.push("no_classifiable_workouts");
@@ -351,7 +361,7 @@ export function selectWorkout(
     category_absent:"La categoria compatibile con questa richiesta non è presente nella libreria.",
     load_target_unavailable:loadTarget.reasons.join(" "),
     workout_load_missing:"I workout non hanno un icu_training_load valido: sincronizza la libreria; nessun carico stimato.",
-    load_band:"Nessun workout sicuro ha il carico nella banda giornaliera ammessa.",
+    load_band:"Nessun workout rispetta il limite superiore di carico automatico o il limite fisiologico di riposo.",
     duration_limit:"I workout della categoria non sono entro ±10 minuti dalla durata selezionata; nessuno step viene tagliato.",
     intensity_limit:"I target dei workout superano i limiti di intensità ammessi, inclusi durata e ampiezza dei picchi.",
     plan_phase:"I workout non sono compatibili con la fase del piano.",
@@ -392,7 +402,7 @@ export function selectWorkout(
     workout,
     loadTarget,
     catalogSource: workout ? "intervals" : "none",
-    catalogNote: workout ? librarySelectionNote(workout,config.duration,level) + (regenerate && alternativeCount <= 1 ? " Nessuna alternativa compatibile: mantenuto l'unico workout disponibile." : "") : noWorkoutReason!,
+    catalogNote: workout ? librarySelectionNote(workout,config.duration,level) + (manual ? " Scelta manuale: il target di carico del Coach è indicativo; categoria richiesta, durata e controlli dei picchi sono verificati." : workout.library!.trainingLoad! < loadTarget.minimum! || workout.library!.trainingLoad! > loadTarget.maximum! ? " Carico fuori dalla banda ideale: scelto il workout reale sicuro più vicino disponibile, entro la capacità osservata e senza modificare la struttura." : "") + (regenerate && alternativeCount <= 1 ? " Nessuna alternativa compatibile: mantenuto l'unico workout disponibile." : "") : noWorkoutReason!,
     requestCommand: request,
     requestSatisfied: !workout ? level === 0 && requested === 0 : manual ? true :
       request === "leggero"
@@ -446,7 +456,8 @@ export function representativeShortlist(candidates: CatalogWorkout[], max = 8): 
 export function workoutStillSafe(w: CatalogWorkout, selection: WorkoutSelection) {
   if (!w.library || !workoutWithinDuration(w,selection.config.duration)) return false;
   const load=w.library.trainingLoad;
-  if (selection.loadTarget?.target == null || selection.loadTarget.target === 0 || load == null || !Number.isFinite(load) || load < selection.loadTarget.minimum! || load > selection.loadTarget.maximum!) return false;
+  const manual=selection.decision.intent.mode === 'manual';
+  if (physiologicalAvailability(selection.readiness) === 0 || load == null || !Number.isFinite(load) || (!manual && (selection.loadTarget?.target == null || selection.loadTarget.target === 0 || load > (selection.loadTarget.baseline ?? selection.loadTarget.maximum)!))) return false;
   const category=plannedCategory(w.library.normalized);
-  return category === w.library.category && plannedIntensitySafety(w.library.normalized,recommendations.indexOf(selection.recommendation)).allowed;
+  return category === w.library.category && (!manual || category === selection.decision.intent.category) && plannedIntensitySafety(w.library.normalized,recommendations.indexOf(selection.recommendation)).allowed;
 }

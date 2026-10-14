@@ -13,7 +13,8 @@ function LoadExplanation({p}: {p: Proposal}) {
   if (!t) return null;
   const load=p.workout?.library?.trainingLoad;
   return <section aria-label="Carico giornaliero">
-    <p>Training Load ideale: {t.target ?? 'non determinabile'}{t.target !== null && ` · banda ${t.minimum}–${t.maximum}`} · dati {t.confidence === 'measured' ? 'misurati' : 'insufficienti'}.</p>
+    <p>Training Load ideale: {t.target ?? 'non determinabile'}{t.target !== null && ` · banda indicativa ${t.minimum}–${t.maximum}`} · dati {t.confidence === 'measured' ? 'misurati' : 'insufficienti'}.</p>
+    <p>{p.decision?.intent.mode === 'manual' ? 'In manuale il target Coach è un riferimento, non un filtro sulla categoria richiesta.' : `Massimo carico automatico: ${t.baseline ?? t.maximum ?? 'non determinabile'} (capacità osservata). La banda ideale non esclude da sola un workout sicuro.`}</p>
     {load != null && <p>Workout Intervals: icu_training_load {load} · differenza dal target {t.target === null ? 'n/d' : (load-t.target).toFixed(1)} · durata {p.duration} min rispetto ai {p.config.duration} min selezionati (±10 min).</p>}
     <ul>{t.reasons.map(r=><li key={r}>{r}</li>)}</ul>
   </section>;
@@ -24,13 +25,14 @@ function SelectionDiagnostics({p}: {p: Proposal}) {
   return <details><summary>Diagnostica selezione</summary>
     <p>Disponibili {d.available} · compatibili {d.compatible} · classificati {d.classified} · candidati finali {d.eligible} · rosa AI {d.shortlist} (massimo 8).</p>
     <p>Esclusioni: normalizzazione {d.excluded.normalization}; classificazione/sport {d.excluded.classificationOrSport}; categoria {d.excluded.category}; durata {d.excluded.duration}; intensità {d.excluded.intensity}; fase {d.excluded.phase}; carico assente {d.excluded.loadMissing ?? 0}; banda carico {d.excluded.loadBand ?? 0}; strutture duplicate {d.excluded.duplicate}; proposta precedente {d.excluded.previous}.</p>
-    <p>Le esclusioni sono conteggiate in ordine di filtro, una volta per workout. La categoria principale non sostituisce il controllo dei picchi.</p>
+    <p>Ogni workout escluso è conteggiato una sola volta; in Coach la categoria consigliata ha priorità fra le opzioni già sicure. La categoria principale non sostituisce il controllo dei picchi.</p>
   </details>;
 }
 export function TrainingProposal({ proposal: p }: { proposal: Proposal }) {
   if (!p.workout) return <article className="training-proposal" aria-label="Proposta di allenamento">
     <h3>{p.status === 'rest' ? 'Riposo' : 'Nessun workout compatibile'}</h3>
     <p role="status">{p.noWorkoutReason}</p>
+    <p>Durata impostata: {p.config?.duration ?? 60} min (±10 min).</p>
     <p>Planner: {recommendationLabel(p.plannerRecommendation ?? p.recommendation)}. Categoria ammessa/richiesta: {recommendationLabel(p.recommendation)}.</p>
     <p>Modifica la richiesta con i comandi sopra oppure sincronizza la libreria da Impostazioni. Nessun workout sintetico viene generato.</p>
     <LoadExplanation p={p} /><SelectionDiagnostics p={p} /><ConstraintTrace constraints={p.constraints} />
@@ -39,6 +41,7 @@ export function TrainingProposal({ proposal: p }: { proposal: Proposal }) {
     <article className="training-proposal" aria-label="Proposta di allenamento">
       <h3>{p.workout.name}</h3>
       <p className="workout-subtitle">{p.duration} min • {p.proposedCategory ? categoryLabels[p.proposedCategory] : recommendationLabel(p.recommendation)}</p>
+      <p className="muted">Durata impostata: {p.config?.duration ?? 60} min (±10 min).</p>
       <WorkoutChart workout={p.workout.library?.normalized} />
       <pre className="workout-structure" aria-label="Struttura tecnica allenamento">{p.workout.structure}</pre>
     </article>

@@ -32,7 +32,7 @@ export async function requestWorkoutAdvice(plan: WorkoutSelection, candidates: C
   const goal = goalFocus(plan.config.goal);
   const input: AdviceInput = { goal, readiness: plan.readiness, confidence: plan.confidence, load: plan.metrics, mode: plan.decision.intent.mode,
     recommended: plan.recommendation, phase:plan.phase, week:plan.week, loadTarget:plan.loadTarget, candidates: local.map((w, index) => ({ id: `candidate-${index + 1}`, category: w.library!.category,
-      ...workoutFeatures(w), trainingLoad:w.library!.trainingLoad ?? null, loadDifference:plan.loadTarget?.target == null || w.library!.trainingLoad == null ? null : w.library!.trainingLoad-plan.loadTarget.target, reasons: ['compatible', 'load_fit', ...(goalFit(w,goal) > 0 ? ['goal_focus' as const] : []),
+      ...workoutFeatures(w), trainingLoad:w.library!.trainingLoad ?? null, loadDifference:plan.loadTarget?.target == null || w.library!.trainingLoad == null ? null : w.library!.trainingLoad-plan.loadTarget.target, reasons: ['compatible', ...(plan.loadTarget?.target == null ? [] : ['load_fit' as const]), ...(goalFit(w,goal) > 0 ? ['goal_focus' as const] : []),
         ...(Math.abs(w.library!.normalized.durationSeconds / 60 - plan.config.duration) <= 10 ? ['duration_fit' as const] : [])] })) };
   try {
     const choice = validateWorkoutChoice(await choose(input), input);
@@ -50,9 +50,9 @@ export function applyWorkoutAdvice(plan: WorkoutSelection, candidates: CatalogWo
   const status = advice.status === 'selected' && !selected ? 'context_changed' : advice.status;
   const duration = workout.library ? workout.library.normalized.durationSeconds / 60 : plan.duration;
   const reason = selected && advice.reason === 'goal_focus' ? `Fra le opzioni compatibili, questa struttura sostiene l’obiettivo: ${goalLabels[goal]}.` :
-    selected && advice.reason === 'load_fit' ? 'Carico Intervals vicino al target giornaliero nella banda ammessa, coerente con la fase del piano.' :
+    selected && advice.reason === 'load_fit' ? 'Carico Intervals vicino al riferimento giornaliero fra i candidati validati, coerente con la modalità scelta.' :
     selected && advice.reason === 'duration_fit' ? 'La durata è vicina al tempo impostato, rispettando i vincoli della proposta.' :
-    `Seduta della categoria ${plan.recommendation}, ${plan.decision.intent.mode === 'manual' ? 'richiesta esplicitamente' : 'consigliata dal Planner'}.`;
+    `Seduta ${workout.library?.category ?? plan.recommendation}, ${plan.decision.intent.mode === 'manual' ? 'richiesta esplicitamente' : 'entro i limiti del Planner'}.`;
   const manualNote = plan.decision.exceedsRecommendation ? ` La richiesta supera il consiglio automatico ${plan.decision.automaticRecommendation}: restano validi gli avvisi della proposta.` : "";
   const fallback = status === 'provider_unavailable' ? ' AI non disponibile o risposta non valida: scelta locale.' : status === 'context_changed' ? ' Dati o candidati aggiornati durante la scelta: proposta locale rivalutata.' : '';
   return { ...plan, workout, duration, catalogNote: selected ? librarySelectionNote(workout,plan.config.duration,recommendations.indexOf(plan.recommendation)) : plan.catalogNote, proposedCategory: workout.library?.category ?? null, advisor: { mode, status, explanation: `${reason} Durata ${Math.round(duration * 10) / 10} minuti.${fallback}${manualNote}`, goal, version: 1 } };
